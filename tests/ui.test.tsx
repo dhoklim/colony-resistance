@@ -1,0 +1,263 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import Home from "../app/page.tsx";
+import { JSDOM } from "jsdom";
+import type {
+  AdminSnapshot,
+  Distribution,
+  ParticipantSnapshot,
+  PublicEvent,
+} from "../app/lib/contracts.ts";
+
+test("the event introduction provides a participant entry link", () => {
+  const html = renderToStaticMarkup(<Home />);
+  assert.match(html, /<a[^>]+href="\/participate"[^>]*>/);
+});
+
+test("closing the event requires an explicit confirmation and a failed request remains retryable", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "https://event.example/",
+    pretendToBeVisual: true,
+  });
+  const properties: Record<string, unknown> = {
+    window: dom.window,
+    self: dom.window,
+    document: dom.window.document,
+    navigator: dom.window.navigator,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  };
+  const originals = Object.fromEntries(
+    Object.keys(properties).map((key) => [
+      key,
+      Object.getOwnPropertyDescriptor(globalThis, key),
+    ]),
+  );
+  for (const [key, value] of Object.entries(properties))
+    Object.defineProperty(globalThis, key, {
+      value,
+      configurable: true,
+      writable: true,
+    });
+  const { render, fireEvent, cleanup, act } = await import("@testing-library/react");
+  t.after(async () => {
+    // Flush framework-scheduled work before removing the browser globals.
+    await act(async () => { cleanup(); });
+    dom.window.close();
+    for (const key of Object.keys(properties)) {
+      const original = originals[key];
+      if (original) Object.defineProperty(globalThis, key, original);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  });
+  const initial: AdminSnapshot = {
+    event: {
+      status: "open",
+      settings: {
+        organizer: "검증 학과",
+        privacyContact: "test@example.invalid",
+        retentionDays: 30,
+        instagramUrl: "",
+      },
+      participantCount: 0,
+      completedCount: 0,
+      closedAt: null,
+      privacyVersion: 2,
+    },
+    distributions: [],
+    participants: [],
+    page: 1,
+    pageSize: 50,
+    totalPages: 1,
+    draw: null,
+  };
+  const requests: unknown[] = [];
+  t.mock.method(
+    globalThis,
+    "fetch",
+    async (_input: unknown, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        requests.push(JSON.parse(String(init.body)));
+        if (requests.length === 1)
+          return Response.json(
+            { error: "연결을 확인해 주세요." },
+            { status: 500 },
+          );
+        return Response.json({
+          ...initial,
+          event: {
+            ...initial.event,
+            status: "closed",
+            closedAt: new Date().toISOString(),
+          },
+        });
+      }
+      return Response.json(initial);
+    },
+  );
+  const { default: AdminDashboard } =
+    await import("../app/components/admin-dashboard.tsx");
+  const view = render(
+    <AdminDashboard initial={initial} email="admin@example.invalid" />,
+  );
+  fireEvent.click(view.getByRole("button", { name: "응답 마감하기" }));
+  const dialog = view.getByRole("dialog", { name: "응답을 마감할까요?" });
+  assert.ok(dialog);
+  const confirm = view.getByRole("button", { name: "마감 확정" });
+  assert.equal((confirm as HTMLButtonElement).disabled, true);
+  assert.equal(requests.length, 0);
+  fireEvent.change(view.getByLabelText("확인 문구"), {
+    target: { value: "응답 마감" },
+  });
+  fireEvent.click(confirm);
+  await view.findByText("연결을 확인해 주세요.");
+  assert.deepEqual(requests[0], { action: "close", confirmation: "응답 마감" });
+  assert.ok(view.getByRole("dialog"));
+  fireEvent.click(view.getByRole("button", { name: "마감 확정" }));
+  await view.findByText("응답을 마감하고 최종 점수를 확정했습니다.");
+  assert.equal(view.queryByRole("dialog"), null);
+  assert.equal(view.queryByRole("button", { name: "응답 마감하기" }), null);
+});
+
+test("a participant can recover a failed submission and complete all ten questions without seeing results early", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "https://event.example/",
+    pretendToBeVisual: true,
+  });
+  const properties: Record<string, unknown> = {
+    window: dom.window,
+    self: dom.window,
+    document: dom.window.document,
+    navigator: dom.window.navigator,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  };
+  const originals = Object.fromEntries(
+    Object.keys(properties).map((key) => [
+      key,
+      Object.getOwnPropertyDescriptor(globalThis, key),
+    ]),
+  );
+  for (const [key, value] of Object.entries(properties))
+    Object.defineProperty(globalThis, key, {
+      value,
+      configurable: true,
+      writable: true,
+    });
+  const { render, fireEvent, waitFor, cleanup, act } =
+    await import("@testing-library/react");
+  t.after(async () => {
+    // Flush framework-scheduled work before removing the browser globals.
+    await act(async () => { cleanup(); });
+    dom.window.close();
+    for (const key of Object.keys(properties)) {
+      const original = originals[key];
+      if (original) Object.defineProperty(globalThis, key, original);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  });
+  const event: PublicEvent = {
+    status: "open",
+    settings: {
+      organizer: "검증 학과",
+      privacyContact: "test@example.invalid",
+      retentionDays: 30,
+      instagramUrl: "",
+    },
+    participantCount: 0,
+    completedCount: 0,
+    closedAt: null,
+    privacyVersion: 2,
+  };
+  const participant: ParticipantSnapshot = {
+    displayName: "테스트",
+    code: "TEST0001",
+    answers: [],
+    completed: false,
+    score: 0,
+    final: false,
+  };
+  let registered = false;
+  let failed = false;
+  let distribution: Distribution | null = null;
+  t.mock.method(
+    globalThis,
+    "fetch",
+    async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/event")) return Response.json({ event });
+      if (url.includes("/api/participant")) {
+        if (init?.method === "POST") registered = true;
+        return Response.json({ participant: registered ? participant : null });
+      }
+      if (url.includes("/api/answer")) {
+        if (init?.method === "POST") {
+          if (!failed) {
+            failed = true;
+            return Response.json(
+              { error: "연결을 확인해 주세요." },
+              { status: 500 },
+            );
+          }
+          const body = JSON.parse(String(init.body)) as {
+            questionId: number;
+            optionIndex: number;
+          };
+          participant.answers.push({ ...body, points: 0 });
+          participant.completed = participant.answers.length === 10;
+          distribution = {
+            questionId: body.questionId,
+            counts: [1, 0, 0, 0],
+            total: 1,
+            percentages: [100, 0, 0, 0],
+            points: [0, 5, 5, 5],
+            selectedIndex: 0,
+            final: false,
+            updatedAt: new Date().toISOString(),
+          };
+        }
+        return Response.json({ distribution, participant });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    },
+  );
+  const { default: Participation } =
+    await import("../app/components/participation.tsx");
+  const view = render(<Participation />);
+  fireEvent.change(await view.findByLabelText("이름"), {
+    target: { value: "테스트" },
+  });
+  fireEvent.change(view.getByLabelText("학번"), {
+    target: { value: "20990001" },
+  });
+  fireEvent.click(view.getByRole("checkbox", { name: /개인정보 수집/ }));
+  fireEvent.click(view.getByRole("button", { name: /실험 시작하기/ }));
+  const first = await view.findByRole("radio", { name: /바로 따라간다/ });
+  assert.equal(view.queryByLabelText("선택 비율 결과"), null);
+  fireEvent.click(first);
+  fireEvent.click(view.getByRole("button", { name: /이 선택으로 결정하기/ }));
+  await view.findByText("연결을 확인해 주세요.");
+  assert.equal((first as HTMLInputElement).checked, true);
+  fireEvent.click(view.getByRole("button", { name: /이 선택으로 결정하기/ }));
+  await view.findByLabelText("선택 비율 결과");
+  fireEvent.click(view.getByRole("button", { name: /다음 상황으로/ }));
+  for (let question = 2; question <= 10; question++) {
+    await waitFor(() => assert.equal(view.getAllByRole("radio").length, 4));
+    assert.equal(view.queryByLabelText("선택 비율 결과"), null);
+    fireEvent.click(view.getAllByRole("radio")[0]);
+    fireEvent.click(view.getByRole("button", { name: /이 선택으로 결정하기/ }));
+    await view.findByLabelText("선택 비율 결과");
+    fireEvent.click(
+      view.getByRole("button", {
+        name: question === 10 ? /나의 저항도 확인/ : /다음 상황으로/,
+      }),
+    );
+  }
+  await view.findByRole("heading", { name: "선택을 모두 기록했습니다." });
+  assert.ok(view.getByText("TEST0001"));
+  assert.ok(view.getByText(/행사 마감 후 최종 점수가 확정됩니다/));
+});
