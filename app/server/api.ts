@@ -23,12 +23,51 @@ export class EventApi {
     readonly service: EventService,
     readonly options: {
       canonicalOrigin?: string;
+      participantOrigin?: string;
       adminEmails: string[];
       getUser: () => Promise<AdminIdentity | null>;
     },
   ) {}
 
   async handle(route: ApiRoute, request: Request): Promise<Response> {
+    const publicRoute =
+      route === "event" || route === "participant" || route === "answer";
+    const pagesRequest = publicRoute && this.isPagesRequest(request);
+    let response: Response;
+    if (request.method === "OPTIONS") {
+      response = pagesRequest
+        ? new Response(null, { status: 204, headers: responseHeaders })
+        : errorResponse(new AppError(403, "허용되지 않은 요청 출처입니다."));
+    } else {
+      response = await this.dispatch(route, request);
+    }
+    if (pagesRequest) {
+      response.headers.set(
+        "Access-Control-Allow-Origin",
+        this.options.participantOrigin!,
+      );
+      response.headers.set(
+        "Access-Control-Allow-Methods",
+        "GET, POST, OPTIONS",
+      );
+      response.headers.set(
+        "Access-Control-Allow-Headers",
+        "Authorization, Content-Type",
+      );
+      response.headers.set("Access-Control-Max-Age", "600");
+      response.headers.append("Vary", "Origin");
+    }
+    return response;
+  }
+
+  private isPagesRequest(request: Request): boolean {
+    return (
+      !!this.options.participantOrigin &&
+      request.headers.get("origin") === this.options.participantOrigin
+    );
+  }
+
+  private async dispatch(route: ApiRoute, request: Request): Promise<Response> {
     try {
       if (
         !["GET", "POST"].includes(request.method) ||
@@ -36,7 +75,13 @@ export class EventApi {
       )
         throw new AppError(405, "지원하지 않는 요청 방식입니다.");
       if (request.method === "POST")
-        assertSameOrigin(request, this.options.canonicalOrigin);
+        assertSameOrigin(
+          request,
+          this.options.canonicalOrigin,
+          route === "participant" || route === "answer"
+            ? this.options.participantOrigin
+            : undefined,
+        );
       if (route === "event")
         return json({ event: await this.service.getPublicEvent() });
       if (route === "participant") return await this.participant(request);
@@ -90,12 +135,17 @@ export class EventApi {
   }
 
   private async participant(request: Request): Promise<Response> {
-    const token = sessionToken(request);
+    const pagesRequest = this.isPagesRequest(request);
+    const token = sessionToken(request, !pagesRequest);
     if (request.method === "GET") {
-      if (!token)
+      if (!token) {
+        const created = createSessionToken();
+        if (pagesRequest)
+          return json({ participant: null, sessionToken: created });
         return json({ participant: null }, 200, {
-          "Set-Cookie": sessionCookie(createSessionToken(), request),
+          "Set-Cookie": sessionCookie(created, request),
         });
+      }
       const row = await this.service.getParticipantByToken(await digest(token));
       return json({
         participant: row ? await this.service.getParticipant(row.id) : null,
@@ -118,7 +168,7 @@ export class EventApi {
   }
 
   private async answer(request: Request): Promise<Response> {
-    const token = sessionToken(request);
+    const token = sessionToken(request, !this.isPagesRequest(request));
     if (!token) throw new AppError(401, "먼저 이벤트에 참여해 주세요.");
     const tokenHash = await digest(token);
     const participant = await this.service.getParticipantByToken(tokenHash);

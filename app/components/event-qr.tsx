@@ -3,16 +3,24 @@ import { useEffect, useState } from "react";
 import { Copy, Download, QrCode } from "lucide-react";
 import QRCode from "qrcode";
 
-export default function EventQr() {
+export default function EventQr({
+  participationUrl,
+}: {
+  participationUrl?: string;
+}) {
   const [url, setUrl] = useState("");
   const [image, setImage] = useState("");
   const [local, setLocal] = useState(false);
   const [message, setMessage] = useState("");
   useEffect(() => {
     let active = true;
-    const link = new URL("/participate", window.location.origin).toString();
+    const target = new URL(
+      participationUrl || "/participate",
+      window.location.origin,
+    );
+    const link = target.toString();
     const isLocal = ["localhost", "127.0.0.1", "[::1]"].includes(
-      window.location.hostname,
+      target.hostname,
     );
     void QRCode.toDataURL(link, {
       width: 800,
@@ -37,7 +45,7 @@ export default function EventQr() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [participationUrl]);
   async function copy() {
     try {
       await navigator.clipboard.writeText(url);

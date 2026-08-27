@@ -25,7 +25,14 @@ export function requireAdmin(
   return user;
 }
 
-export function sessionToken(request: Request): string | null {
+export function sessionToken(
+  request: Request,
+  allowCookie = true,
+): string | null {
+  const authorization = request.headers.get("authorization");
+  if (authorization)
+    return authorization.match(/^Bearer ([a-f0-9]{64})$/)?.[1] ?? null;
+  if (!allowCookie) return null;
   const value = request.headers
     .get("cookie")
     ?.split(";")

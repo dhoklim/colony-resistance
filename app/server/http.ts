@@ -20,8 +20,11 @@ export function json(
 export function assertSameOrigin(
   request: Request,
   canonicalOrigin?: string,
+  participantOrigin?: string,
 ): void {
   const expected = new URL(canonicalOrigin || request.url).origin;
+  if (participantOrigin && request.headers.get("origin") === participantOrigin)
+    return;
   if (
     request.headers.get("origin") !== expected ||
     request.headers.get("sec-fetch-site") === "cross-site"

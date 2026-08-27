@@ -11,6 +11,11 @@
       "migrations_dir": "drizzle",
     },
   ],
-  "vars": { "ADMIN_EMAILS": "", "SITE_URL": "" },
+  "vars": {
+    "ADMIN_EMAILS": "",
+    "SITE_URL": "",
+    "PARTICIPANT_ORIGIN": "",
+    "PARTICIPATION_URL": "",
+  },
   "observability": { "enabled": true, "head_sampling_rate": 1 },
 }

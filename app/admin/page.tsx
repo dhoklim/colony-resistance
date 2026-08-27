@@ -6,7 +6,7 @@ import {
   chatGPTSignOutPath,
   getChatGPTUser,
 } from "../chatgpt-auth";
-import { adminEmails, createApi } from "../server/context";
+import { adminEmails, createApi, participationUrl } from "../server/context";
 import { isAllowedAdmin } from "../server/auth";
 import AdminDashboard from "../components/admin-dashboard";
 
@@ -56,5 +56,11 @@ export default async function AdminPage() {
     );
   }
   const snapshot = await createApi().service.getAdminSnapshot();
-  return <AdminDashboard initial={snapshot} email={user!.email} />;
+  return (
+    <AdminDashboard
+      initial={snapshot}
+      email={user!.email}
+      participationUrl={participationUrl()}
+    />
+  );
 }

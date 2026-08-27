@@ -310,3 +310,115 @@ test("two independent HTTP sessions finish the event, receive final scores, and 
   const restored = await api(admin).handle("admin", request("/api/admin"));
   assert.deepEqual(((await restored.json()) as AdminSnapshot).draw, draws[0]);
 });
+
+test("GitHub Pages uses an explicit CORS origin and bearer sessions without third-party cookies", async () => {
+  await database.db.batch(
+    [
+      "DELETE FROM draws",
+      "DELETE FROM answers",
+      "DELETE FROM participants",
+      "DELETE FROM events",
+      "DELETE FROM rate_limits",
+    ].map((sql) => database.db.prepare(sql)),
+  );
+  await service.updateSettings({
+    organizer: "검증 학과",
+    privacyContact: "test@example.invalid",
+    retentionDays: 30,
+    instagramUrl: "",
+  });
+  await service.start();
+  const pagesOrigin = "https://dhoklim.github.io";
+  const pagesApi = new EventApi(service, {
+    canonicalOrigin: origin,
+    participantOrigin: pagesOrigin,
+    adminEmails: [admin.email],
+    getUser: async () => null,
+  });
+  const headers = { origin: pagesOrigin, "sec-fetch-site": "cross-site" };
+  const preflight = await pagesApi.handle(
+    "participant",
+    new Request(origin + "/api/participant", {
+      method: "OPTIONS",
+      headers: {
+        ...headers,
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "authorization,content-type",
+      },
+    }),
+  );
+  assert.equal(preflight.status, 204);
+  assert.equal(
+    preflight.headers.get("access-control-allow-origin"),
+    pagesOrigin,
+  );
+  assert.equal(preflight.headers.get("access-control-allow-credentials"), null);
+  const initial = await pagesApi.handle(
+    "participant",
+    request("/api/participant", undefined, headers),
+  );
+  const { sessionToken } = (await initial.json()) as { sessionToken: string };
+  assert.match(sessionToken, /^[a-f0-9]{64}$/);
+  assert.equal(initial.headers.get("set-cookie"), null);
+  const authHeaders = { ...headers, authorization: `Bearer ${sessionToken}` };
+  const registered = await pagesApi.handle(
+    "participant",
+    request(
+      "/api/participant",
+      {
+        name: "페이지 참가자",
+        studentId: "20997777",
+        consent: true,
+        privacyVersion: 2,
+      },
+      authHeaders,
+    ),
+  );
+  assert.equal(registered.status, 200);
+  const answer = await pagesApi.handle(
+    "answer",
+    request("/api/answer", { questionId: 1, optionIndex: 2 }, authHeaders),
+  );
+  assert.equal(answer.status, 200);
+  assert.equal(answer.headers.get("access-control-allow-origin"), pagesOrigin);
+  const resumed = await pagesApi.handle(
+    "participant",
+    request("/api/participant", undefined, authHeaders),
+  );
+  assert.equal(
+    ((await resumed.json()) as { participant: ParticipantSnapshot }).participant
+      .answers.length,
+    1,
+  );
+  const other = await pagesApi.handle(
+    "participant",
+    request("/api/participant", undefined, headers),
+  );
+  assert.equal(
+    ((await other.json()) as { participant: null }).participant,
+    null,
+  );
+  const invalid = await pagesApi.handle(
+    "participant",
+    new Request(origin + "/api/participant", {
+      method: "OPTIONS",
+      headers: { origin: "https://attacker.example" },
+    }),
+  );
+  assert.equal(invalid.status, 403);
+  assert.equal(invalid.headers.get("access-control-allow-origin"), null);
+  const adminPreflight = await pagesApi.handle(
+    "admin",
+    new Request(origin + "/api/admin", { method: "OPTIONS", headers }),
+  );
+  assert.equal(adminPreflight.status, 403);
+  const adminPost = await pagesApi.handle(
+    "admin",
+    request(
+      "/api/admin",
+      { action: "close", confirmation: "응답 마감" },
+      authHeaders,
+    ),
+  );
+  assert.equal(adminPost.status, 403);
+});

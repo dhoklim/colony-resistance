@@ -4,6 +4,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import Home from "../app/page.tsx";
 import { JSDOM } from "jsdom";
+import { createApiClient } from "../app/lib/client.ts";
 import type {
   AdminSnapshot,
   Distribution,
@@ -14,6 +15,40 @@ import type {
 test("the event introduction provides a participant entry link", () => {
   const html = renderToStaticMarkup(<Home />);
   assert.match(html, /<a[^>]+href="\/participate"[^>]*>/);
+});
+
+test("the Pages client persists an opaque session and sends it only to the configured API without cookies", async (t) => {
+  const values = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      values.set(key, value);
+    },
+  };
+  const token = "a".repeat(64);
+  const calls: { url: string; init?: RequestInit }[] = [];
+  t.mock.method(
+    globalThis,
+    "fetch",
+    async (url: unknown, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      return Response.json({
+        participant: null,
+        ...(calls.length === 1 ? { sessionToken: token } : {}),
+      });
+    },
+  );
+  const client = createApiClient("https://event.example", storage);
+  await client("/api/participant");
+  const resumed = createApiClient("https://event.example", storage);
+  await resumed("/api/answer", { questionId: 1, optionIndex: 0 });
+  assert.equal(calls[0].url, "https://event.example/api/participant");
+  assert.equal(calls[1].init?.credentials, "omit");
+  assert.equal(
+    new Headers(calls[1].init?.headers).get("authorization"),
+    `Bearer ${token}`,
+  );
+  assert.equal(values.size, 1);
 });
 
 test("closing the event requires an explicit confirmation and a failed request remains retryable", async (t) => {
@@ -42,10 +77,13 @@ test("closing the event requires an explicit confirmation and a failed request r
       configurable: true,
       writable: true,
     });
-  const { render, fireEvent, cleanup, act } = await import("@testing-library/react");
+  const { render, fireEvent, cleanup, act } =
+    await import("@testing-library/react");
   t.after(async () => {
     // Flush framework-scheduled work before removing the browser globals.
-    await act(async () => { cleanup(); });
+    await act(async () => {
+      cleanup();
+    });
     dom.window.close();
     for (const key of Object.keys(properties)) {
       const original = originals[key];
@@ -152,7 +190,9 @@ test("a participant can recover a failed submission and complete all ten questio
     await import("@testing-library/react");
   t.after(async () => {
     // Flush framework-scheduled work before removing the browser globals.
-    await act(async () => { cleanup(); });
+    await act(async () => {
+      cleanup();
+    });
     dom.window.close();
     for (const key of Object.keys(properties)) {
       const original = originals[key];

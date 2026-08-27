@@ -32,9 +32,11 @@ const statusCopy: Record<EventStatus, string> = {
 export default function AdminDashboard({
   initial,
   email,
+  participationUrl,
 }: {
   initial: AdminSnapshot;
   email: string;
+  participationUrl?: string;
 }) {
   const [data, setData] = useState(initial);
   const [pending, setPending] = useState(false);
@@ -462,7 +464,7 @@ export default function AdminDashboard({
               </section>
             </div>
             <aside className="admin-aside">
-              <EventQr />
+              <EventQr participationUrl={participationUrl} />
               <EventSettings
                 key={event.privacyVersion}
                 event={event}
