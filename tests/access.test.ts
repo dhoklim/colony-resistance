@@ -38,6 +38,114 @@ const request = (
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
+test("explicit public admin access permits anonymous operations with disclosure and action confirmation", async (t) => {
+  t.after(async () => {
+    await database.db.batch(
+      [
+        "DELETE FROM draws",
+        "DELETE FROM answers",
+        "DELETE FROM participants",
+        "DELETE FROM events",
+        "DELETE FROM rate_limits",
+      ].map((sql) => database.db.prepare(sql)),
+    );
+  });
+  const publicService = new EventService(database.db, true);
+  const publicApi = new EventApi(publicService, {
+    canonicalOrigin: origin,
+    adminEmails: [],
+    getUser: async () => null,
+  });
+  const snapshot = await publicApi.handle("admin", request("/api/admin"));
+  assert.equal(snapshot.status, 200);
+  assert.equal(
+    ((await snapshot.json()) as AdminSnapshot).event.publicAdmin,
+    true,
+  );
+  const configured = await publicApi.handle(
+    "admin",
+    request("/api/admin", {
+      action: "settings",
+      settings: {
+        organizer: "공개 검증",
+        privacyContact: "test@example.invalid",
+        retentionDays: 30,
+        instagramUrl: "",
+      },
+    }),
+  );
+  assert.equal(configured.status, 200);
+  const unconfirmed = await publicApi.handle(
+    "admin",
+    request("/api/admin", { action: "start" }),
+  );
+  assert.equal(unconfirmed.status, 400);
+  const untrusted = await publicApi.handle(
+    "admin",
+    request(
+      "/api/admin",
+      { action: "start", confirmation: "행사 시작" },
+      { origin: "https://untrusted.example" },
+    ),
+  );
+  assert.equal(untrusted.status, 403);
+  assert.equal((await publicService.getPublicEvent()).status, "draft");
+  const started = await publicApi.handle(
+    "admin",
+    request("/api/admin", { action: "start", confirmation: "행사 시작" }),
+  );
+  assert.equal(started.status, 200);
+  const initial = await publicApi.handle(
+    "participant",
+    request("/api/participant"),
+  );
+  const cookie = initial.headers.get("set-cookie")!.split(";")[0];
+  const registration = {
+    name: "공개 동의 참가자",
+    studentId: "20997777",
+    consent: true,
+    privacyVersion: 2,
+  };
+  const outdated = await publicApi.handle(
+    "participant",
+    request("/api/participant", registration, { cookie }),
+  );
+  assert.equal(outdated.status, 400);
+  assert.equal((await publicService.getPublicEvent()).participantCount, 0);
+  const registered = await publicApi.handle(
+    "participant",
+    request(
+      "/api/participant",
+      { ...registration, publicAdminConsent: true },
+      { cookie },
+    ),
+  );
+  assert.equal(registered.status, 200);
+  const csv = await publicApi.handle("export", request("/api/admin/export"));
+  assert.equal(csv.status, 200);
+  assert.match(await csv.text(), /"공개 동의 참가자","20997777"/);
+  await publicApi.handle("admin", request("/api/admin?action=close"));
+  assert.equal((await publicService.getPublicEvent()).status, "open");
+  for (let questionId = 1; questionId <= 10; questionId++) {
+    const answered = await publicApi.handle(
+      "answer",
+      request("/api/answer", { questionId, optionIndex: 0 }, { cookie }),
+    );
+    assert.equal(answered.status, 200);
+  }
+  const closed = await publicApi.handle(
+    "admin",
+    request("/api/admin", { action: "close", confirmation: "응답 마감" }),
+  );
+  assert.equal(closed.status, 200);
+  const draw = await publicApi.handle(
+    "admin",
+    request("/api/admin", { action: "draw", confirmation: "당첨자 추첨" }),
+  );
+  assert.equal(draw.status, 200);
+  assert.equal(((await draw.json()) as AdminSnapshot).draw?.winners.length, 1);
+});
+
 test("admin data and exports require a verified identity even when client headers claim one", async () => {
   const forged = request("/api/admin", undefined, {
     "oai-authenticated-user-email": admin.email,

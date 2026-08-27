@@ -17,9 +17,11 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function AdminPage() {
-  const user = await getChatGPTUser();
+  const api = createApi();
+  const publicAdmin = api.service.publicAdmin;
+  const user = publicAdmin ? null : await getChatGPTUser();
   const allowed = adminEmails();
-  if (!isAllowedAdmin(user, allowed)) {
+  if (!publicAdmin && !isAllowedAdmin(user, allowed)) {
     return (
       <main className="shell access-page">
         <Link prefetch={false} href="/" className="back-link">
@@ -55,11 +57,11 @@ export default async function AdminPage() {
       </main>
     );
   }
-  const snapshot = await createApi().service.getAdminSnapshot();
+  const snapshot = await api.service.getAdminSnapshot();
   return (
     <AdminDashboard
       initial={snapshot}
-      email={user!.email}
+      email={user?.email}
       participationUrl={participationUrl()}
     />
   );

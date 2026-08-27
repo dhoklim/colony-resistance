@@ -12,6 +12,7 @@ export type PublicEvent = {
   completedCount: number;
   closedAt: string | null;
   privacyVersion: number;
+  publicAdmin: boolean;
 };
 export type Distribution = {
   questionId: number;

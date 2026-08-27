@@ -33,8 +33,21 @@ export function Registration({
       <p className="section-description">
         당첨자 확인을 위한 정보를 입력해 주세요.
         <br />
-        다른 참가자에게는 공개되지 않습니다.
+        {event.publicAdmin
+          ? "입력한 정보는 공개 운영실에서 누구나 조회할 수 있습니다."
+          : "다른 참가자에게는 공개되지 않습니다."}
       </p>
+      {event.publicAdmin && (
+        <div
+          className="alert alert-warning"
+          role="note"
+          aria-label="공개 운영실 안내"
+        >
+          이름·학번·완료 문항 수·점수·당첨 결과는 인터넷 이용자 누구나 조회하고
+          다운로드할 수 있습니다. 운영실의 전체 응답 통계도 공개됩니다.
+          누구나 행사 시작·마감·추첨을 실행할 수 있으므로 이를 확인하고 참여해 주세요.
+        </div>
+      )}
       <form
         onSubmit={(submit) => {
           submit.preventDefault();
@@ -77,6 +90,12 @@ export function Registration({
             <dd>이름, 학번, 응답 기록</dd>
             <dt>이용 목적</dt>
             <dd>중복 참여 방지, 점수 산정 및 당첨자 확인</dd>
+            <dt>열람 범위</dt>
+            <dd>
+              {event.publicAdmin
+                ? "공개 운영실과 명단 파일을 통해 누구나 열람·다운로드 가능"
+                : "허용된 운영자만 열람 가능"}
+            </dd>
             <dt>운영 주체</dt>
             <dd>{event.settings.organizer}</dd>
             <dt>문의처</dt>
@@ -99,7 +118,11 @@ export function Registration({
             required
             disabled={pending}
           />
-          <span>개인정보 수집 및 이용에 동의합니다.</span>
+          <span>
+            {event.publicAdmin
+              ? "개인정보 수집·이용 및 이름·학번·참여 현황·점수·당첨 결과의 공개에 동의합니다."
+              : "개인정보 수집 및 이용에 동의합니다."}
+          </span>
         </label>
         <button
           className="button button-primary full-width"

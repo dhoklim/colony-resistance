@@ -88,6 +88,7 @@ export default function Participation() {
                 </section>
               ) : flow.phase === "registration" && flow.event ? (
                 <Registration
+                  key={`${flow.event.privacyVersion}:${flow.event.publicAdmin}`}
                   event={flow.event}
                   pending={flow.pending}
                   onRegister={flow.register}

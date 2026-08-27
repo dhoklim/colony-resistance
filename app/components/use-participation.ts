@@ -168,7 +168,13 @@ export function useParticipation() {
     try {
       const data = await apiJson<{ participant: ParticipantSnapshot }>(
         "/api/participant",
-        { name, studentId, consent, privacyVersion: event.privacyVersion },
+        {
+          name,
+          studentId,
+          consent,
+          privacyVersion: event.privacyVersion,
+          publicAdminConsent: event.publicAdmin && consent,
+        },
       );
       setParticipant(data.participant);
       setQuestionId(1);

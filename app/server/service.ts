@@ -91,7 +91,10 @@ function makeCounts(rows: CountRow[]): number[][] {
 }
 
 export class EventService {
-  constructor(readonly db: Pick<D1Database, "prepare" | "batch">) {}
+  constructor(
+    readonly db: Pick<D1Database, "prepare" | "batch">,
+    readonly publicAdmin = false,
+  ) {}
 
   private async event(): Promise<EventRow> {
     let row = await this.db
@@ -134,6 +137,7 @@ export class EventService {
       completedCount: counts?.completed ?? 0,
       closedAt: event.closed_at,
       privacyVersion: event.privacy_version,
+      publicAdmin: this.publicAdmin,
     };
   }
 
@@ -181,6 +185,11 @@ export class EventService {
         "이름과 학번을 입력하고 개인정보 수집 안내에 동의해 주세요.",
       );
     }
+    if (this.publicAdmin && input.publicAdminConsent !== true)
+      throw new AppError(
+        400,
+        "공개 운영실 안내를 확인해야 합니다. 새로고침 후 이름·학번 등의 공개에 동의해 주세요.",
+      );
     const name = input.name.trim().normalize("NFC");
     const studentId = input.studentId
       .normalize("NFKC")

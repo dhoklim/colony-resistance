@@ -143,6 +143,7 @@ test("closing the event requires an explicit confirmation and a failed request r
       completedCount: 0,
       closedAt: null,
       privacyVersion: 2,
+      publicAdmin: true,
     },
     distributions: [],
     participants: [],
@@ -178,8 +179,9 @@ test("closing the event requires an explicit confirmation and a failed request r
   const { default: AdminDashboard } =
     await import("../app/components/admin-dashboard.tsx");
   const view = render(
-    <AdminDashboard initial={initial} email="admin@example.invalid" />,
+    <AdminDashboard initial={initial} />,
   );
+  assert.ok(view.getByText(/누구나 이름·학번/));
   fireEvent.click(view.getByRole("button", { name: "응답 마감하기" }));
   const dialog = view.getByRole("dialog", { name: "응답을 마감할까요?" });
   assert.ok(dialog);
@@ -251,6 +253,7 @@ test("a participant can recover a failed submission and complete all ten questio
     completedCount: 0,
     closedAt: null,
     privacyVersion: 2,
+    publicAdmin: false,
   };
   const participant: ParticipantSnapshot = {
     displayName: "테스트",
@@ -270,7 +273,11 @@ test("a participant can recover a failed submission and complete all ten questio
       const url = String(input);
       if (url.includes("/api/event")) return Response.json({ event });
       if (url.includes("/api/participant")) {
-        if (init?.method === "POST") registered = true;
+        if (init?.method === "POST") {
+          const body = JSON.parse(String(init.body));
+          assert.equal(body.publicAdminConsent, true);
+          registered = true;
+        }
         return Response.json({ participant: registered ? participant : null });
       }
       if (url.includes("/api/answer")) {
@@ -308,6 +315,20 @@ test("a participant can recover a failed submission and complete all ten questio
     await import("../app/components/participation.tsx");
   const view = render(<Participation />);
   fireEvent.change(await view.findByLabelText("이름"), {
+    target: { value: "테스트" },
+  });
+  fireEvent.change(view.getByLabelText("학번"), {
+    target: { value: "20990001" },
+  });
+  fireEvent.click(view.getByRole("checkbox", { name: /개인정보 수집/ }));
+  event.publicAdmin = true;
+  fireEvent(dom.window.document, new dom.window.Event("visibilitychange"));
+  assert.ok(await view.findByRole("note", { name: "공개 운영실 안내" }));
+  assert.equal(
+    (view.getByRole("checkbox", { name: /개인정보 수집/ }) as HTMLInputElement).checked,
+    false,
+  );
+  fireEvent.change(view.getByLabelText("이름"), {
     target: { value: "테스트" },
   });
   fireEvent.change(view.getByLabelText("학번"), {

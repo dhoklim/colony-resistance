@@ -13,6 +13,7 @@
   ],
   "vars": {
     "ADMIN_EMAILS": "",
+    "PUBLIC_ADMIN_ACCESS": "false",
     "SITE_URL": "",
     "PARTICIPANT_ORIGIN": "",
     "PARTICIPATION_URL": "",

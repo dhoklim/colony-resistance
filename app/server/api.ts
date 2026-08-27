@@ -86,10 +86,9 @@ export class EventApi {
         return json({ event: await this.service.getPublicEvent() });
       if (route === "participant") return await this.participant(request);
       if (route === "answer") return await this.answer(request);
-      const user = requireAdmin(
-        await this.options.getUser(),
-        this.options.adminEmails,
-      );
+      const user = this.service.publicAdmin
+        ? null
+        : requireAdmin(await this.options.getUser(), this.options.adminEmails);
       if (route === "export")
         return new Response(await this.service.exportCsv(), {
           headers: {
@@ -105,7 +104,9 @@ export class EventApi {
           ),
         );
       await this.service.consumeRateLimit(
-        `admin:${await digest(user.userId)}`,
+        user
+          ? `admin:${await digest(user.userId)}`
+          : `public-admin:${await digest(request.headers.get("cf-connecting-ip") || "shared")}`,
         60,
         60000,
       );

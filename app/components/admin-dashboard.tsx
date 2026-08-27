@@ -35,7 +35,7 @@ export default function AdminDashboard({
   participationUrl,
 }: {
   initial: AdminSnapshot;
-  email: string;
+  email?: string;
   participationUrl?: string;
 }) {
   const [data, setData] = useState(initial);
@@ -155,19 +155,40 @@ export default function AdminDashboard({
           <div className="admin-heading">
             <div>
               <p className="eyebrow">
-                <ShieldCheck size={14} aria-hidden="true" /> AUTHORIZED
-                PERSONNEL ONLY
+                {event.publicAdmin ? (
+                  <Users size={14} aria-hidden="true" />
+                ) : (
+                  <ShieldCheck size={14} aria-hidden="true" />
+                )}
+                {event.publicAdmin
+                  ? "PUBLIC EVENT CONTROL"
+                  : "AUTHORIZED PERSONNEL ONLY"}
               </p>
               <h1>
                 이벤트 운영실<span className="title-dot">.</span>
               </h1>
-              <p className="admin-account">{email}</p>
+              <p className="admin-account">
+                {event.publicAdmin
+                  ? "로그인 없이 누구나 이용할 수 있습니다."
+                  : email}
+              </p>
             </div>
             <span className={`badge status-badge status-${event.status}`}>
               <span className="status-dot" />
               {statusCopy[event.status]}
             </span>
           </div>
+          {event.publicAdmin && (
+            <div
+              className="alert alert-warning"
+              role="note"
+              aria-label="공개 운영실 안내"
+            >
+              누구나 이름·학번·참여 현황·점수·당첨 결과를 조회·다운로드하고
+              행사 시작·마감·추첨을 실행할 수 있습니다. 확인 절차는 실수
+              방지용이며 접근 권한을 제한하지 않습니다.
+            </div>
+          )}
           {message && (
             <div className="alert alert-success" role="status">
               {message}
@@ -490,7 +511,7 @@ export default function AdminDashboard({
           <footer className="admin-footer">
             <span>
               {updated ? `최근 갱신 ${updated} KST` : "5초마다 자동 갱신"} ·
-              운영자에게만 표시
+              {event.publicAdmin ? "전체 공개" : "운영자에게만 표시"}
             </span>
             <button
               className="small-link"

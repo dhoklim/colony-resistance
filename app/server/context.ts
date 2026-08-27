@@ -16,11 +16,16 @@ export function participationUrl(): string | undefined {
 
 export function createApi(): EventApi {
   if (!env.DB) throw new Error("Event database binding is unavailable.");
-  return new EventApi(new EventService(env.DB.withSession("first-primary")), {
-    canonicalOrigin: process.env.SITE_URL || env.SITE_URL || undefined,
-    participantOrigin:
-      process.env.PARTICIPANT_ORIGIN || env.PARTICIPANT_ORIGIN || undefined,
-    adminEmails: adminEmails(),
-    getUser: getChatGPTUser,
-  });
+  const publicAdmin =
+    (process.env.PUBLIC_ADMIN_ACCESS || env.PUBLIC_ADMIN_ACCESS) === "true";
+  return new EventApi(
+    new EventService(env.DB.withSession("first-primary"), publicAdmin),
+    {
+      canonicalOrigin: process.env.SITE_URL || env.SITE_URL || undefined,
+      participantOrigin:
+        process.env.PARTICIPANT_ORIGIN || env.PARTICIPANT_ORIGIN || undefined,
+      adminEmails: adminEmails(),
+      getUser: getChatGPTUser,
+    },
+  );
 }
