@@ -49,13 +49,26 @@ export function createApiClient(
       if (
         browserStorage &&
         path === "/api/participant" &&
+        body === undefined &&
         data &&
         typeof data === "object" &&
         "sessionToken" in data &&
         typeof data.sessionToken === "string" &&
         /^[a-f0-9]{64}$/.test(data.sessionToken)
-      )
+      ) {
+        const persistedToken = browserStorage.getItem(storageKey);
+        if (
+          persistedToken &&
+          /^[a-f0-9]{64}$/.test(persistedToken) &&
+          persistedToken !== data.sessionToken
+        ) {
+          // Another tab may have already registered while this request waited.
+          if (persistedToken === token)
+            throw new Error("참여 기록을 확인하지 못했습니다. 다시 시도해 주세요.");
+          return requestJson<T>(path, undefined, signal);
+        }
         browserStorage.setItem(storageKey, data.sessionToken);
+      }
       return data as T;
     } finally {
       clearTimeout(timer);

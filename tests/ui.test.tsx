@@ -51,6 +51,45 @@ test("the Pages client persists an opaque session and sends it only to the confi
   assert.equal(values.size, 1);
 });
 
+test("a delayed bootstrap in another tab preserves and resumes the registered session", async (t) => {
+  const values = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      values.set(key, value);
+    },
+  };
+  const firstToken = "a".repeat(64);
+  const delayedToken = "b".repeat(64);
+  const pending: ((response: Response) => void)[] = [];
+  const participant = { code: "TEST0001", displayName: "테스트" };
+  let registered = false;
+  t.mock.method(globalThis, "fetch", (_url: unknown, init?: RequestInit) => {
+    const authorization = new Headers(init?.headers).get("authorization");
+    if (!authorization)
+      return new Promise<Response>((resolve) => pending.push(resolve));
+    if (authorization === `Bearer ${firstToken}`) {
+      if (init?.method === "POST") registered = true;
+      return Promise.resolve(
+        Response.json({ participant: registered ? participant : null }),
+      );
+    }
+    return Promise.resolve(Response.json({ participant: null }));
+  });
+  const firstTab = createApiClient("https://event.example", storage);
+  const secondTab = createApiClient("https://event.example", storage);
+  const firstBootstrap = firstTab("/api/participant");
+  const delayedBootstrap = secondTab("/api/participant");
+  assert.equal(pending.length, 2);
+  pending[0](Response.json({ participant: null, sessionToken: firstToken }));
+  await firstBootstrap;
+  await firstTab("/api/participant", { displayName: "테스트" });
+  pending[1](Response.json({ participant: null, sessionToken: delayedToken }));
+  assert.deepEqual(await delayedBootstrap, { participant });
+  assert.equal(values.get("colony-session:https://event.example"), firstToken);
+  assert.deepEqual(await firstTab("/api/participant"), { participant });
+});
+
 test("closing the event requires an explicit confirmation and a failed request remains retryable", async (t) => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "https://event.example/",
