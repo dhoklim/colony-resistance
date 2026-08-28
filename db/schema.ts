@@ -14,6 +14,7 @@ export const events = sqliteTable(
     id: integer("id").primaryKey(),
     status: text("status").notNull().default("draft"),
     round: integer("round").notNull().default(1),
+    progressStep: integer("progress_step").notNull().default(0),
     revealedQuestionMask: integer("revealed_questions").notNull().default(0),
     settings: text("settings")
       .notNull()

@@ -146,7 +146,7 @@ export default function Home() {
           <article>
             <span>01</span>
             <h3>상황에 답하기</h3>
-            <p>10개의 상황에서 가장 먼저 할 행동을 선택하세요.</p>
+            <p>닉네임으로 입장하고, 운영자가 공개하는 문제에 차례로 답하세요.</p>
           </article>
           <article>
             <span>02</span>
@@ -156,7 +156,7 @@ export default function Home() {
           <article>
             <span>03</span>
             <h3>저항도 확인하기</h3>
-            <p>운영자가 결과를 공개하면 선택 비율·점수를 확인하고 다음 문항으로 진행합니다.</p>
+            <p>공개된 비율·점수를 확인하세요. 운영자가 다음 문제를 열면 자동으로 넘어갑니다.</p>
           </article>
         </div>
       </section>

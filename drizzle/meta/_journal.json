@@ -29,6 +29,13 @@
       "when": 1787902742902,
       "tag": "0003_good_obadiah_stane",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1787905812785,
+      "tag": "0004_shallow_iron_patriot",
+      "breakpoints": true
     }
   ]
 }

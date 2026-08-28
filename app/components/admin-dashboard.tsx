@@ -53,6 +53,14 @@ export default function AdminDashboard({
   const event = data.event;
   const isFinal = event.status === "closed" || event.status === "drawn";
   const scoresVisible = questions.every((question) => event.revealedQuestions.includes(question.id));
+  const step = event.progressStep ?? 0;
+  const currentQuestion = Math.ceil(step / 2);
+  const nextQuestion = Math.floor(step / 2) + 1;
+  const releasingResult = step % 2 === 1 || event.status === "closed" || event.revealedQuestions.includes(nextQuestion);
+  const progressDone = step >= questions.length * 2;
+  const controlQuestion = event.status === "closed" && !progressDone ? nextQuestion : currentQuestion;
+  const responseCount = data.distributions.find((result) => result.questionId === controlQuestion)?.total ?? 0;
+  const advanceDisabled = pending || progressDone || event.status === "draft" || event.status === "drawn";
 
   const accept = useCallback((snapshot: AdminSnapshot) => {
     setData(snapshot);
@@ -108,7 +116,7 @@ export default function AdminDashboard({
     };
   }, [refresh]);
 
-  async function mutate(body: { action: AdminAction | "reveal"; round: number; questionId?: number }) {
+  async function mutate(body: { action: AdminAction; round: number } | { action: "advance"; round: number; step: number }) {
     if (busy.current) return;
     busy.current = true;
     generation.current += 1;
@@ -117,8 +125,8 @@ export default function AdminDashboard({
     setMessage("");
     try {
       accept(await apiJson<AdminSnapshot>("/api/admin", body));
-      setMessage(body.action === "reveal"
-        ? `${body.questionId}번 문항의 결과를 공개했습니다.`
+      setMessage(body.action === "advance"
+        ? `${Math.floor(body.step / 2) + 1}번 ${releasingResult ? "결과를" : "문제를"} 공개했습니다.`
         : actionCopy[body.action].success);
       setAction(null);
     } catch (caught) {
@@ -313,34 +321,35 @@ export default function AdminDashboard({
           )}
           <section className="panel reveal-panel" aria-labelledby="reveal-title">
             <div className="section-heading">
-              <h2 id="reveal-title">문항별 결과 공개</h2>
+              <h2 id="reveal-title">문제 진행</h2>
               <span className="badge">{event.revealedQuestions.length} / 10 공개</span>
             </div>
             <p className="small-note">
-              답변이 모이면 해당 문항의 결과를 공개하세요. 선택 비율과 점수가 함께 표시되며, 참가자는 다음 문항으로 넘어갈 수 있습니다.
+              버튼 하나로 문제 공개 → 결과 공개 → 다음 문제 공개 순서로 진행합니다. 참가자 화면은 자동으로 넘어갑니다.
             </p>
-            <div className="question-reveal-grid">
-              {questions.map((question) => {
-                const revealed = event.revealedQuestions.includes(question.id);
-                const total = data.distributions.find((result) => result.questionId === question.id)?.total ?? 0;
-                return (
-                  <button
-                    type="button"
-                    key={question.id}
-                    className={`reveal-question${revealed ? " is-revealed" : ""}`}
-                    aria-label={`${question.id}번 문항 결과 공개`}
-                    disabled={pending || event.status === "draft" || revealed}
-                    onClick={() => void mutate({ action: "reveal", questionId: question.id, round: event.round })}
-                  >
-                    <span>{String(question.id).padStart(2, "0")}번 문항</span>
-                    <strong>{revealed ? "공개 완료" : "결과 공개"}</strong>
-                    <small>{total}명 응답</small>
-                  </button>
-                );
-              })}
+            <div className="question-control">
+              <div aria-live="polite">
+                <strong>{progressDone ? "10개 문제의 결과를 모두 공개했습니다."
+                  : event.status === "closed" ? `${controlQuestion}번 문제 · 응답 마감`
+                  : step === 0 ? "참가자가 입장 후 대기하고 있습니다."
+                    : step % 2 === 1 ? `${currentQuestion}번 문제 · 답변 받는 중`
+                      : `${currentQuestion}번 결과 공개 완료 · 다음 문제 대기`}</strong>
+                <p>{step === 0 ? `${event.participantCount}명 입장`
+                  : `${responseCount} / ${event.participantCount}명 응답`}</p>
+              </div>
+              <button type="button" className="button button-primary" disabled={advanceDisabled}
+                onClick={() => void mutate({ action: "advance", step, round: event.round })}>
+                {progressDone ? "모든 문제 진행 완료" : `${nextQuestion}번 ${releasingResult ? "결과" : "문제"} 공개`}
+                <ArrowRight size={18} aria-hidden="true" />
+              </button>
             </div>
             <p className="small-note">
-              공개 전에는 운영실에서도 응답 수만 보입니다. 공개한 점수는 행사 마감 전까지 응답에 따라 달라질 수 있습니다.
+              {event.status === "closed" && !progressDone
+                ? "응답 마감 후에는 남은 문항의 결과만 차례로 공개합니다. 새 답변은 받지 않습니다."
+                : releasingResult
+                ? "응답 수를 확인한 뒤 결과를 공개하세요. 공개 즉시 이 문항의 답변이 마감되며 선택 비율과 점수가 표시됩니다."
+                : progressDone ? "응답 마감 후 당첨자를 선정할 수 있습니다."
+                  : "아직 열리지 않은 문제는 참가자에게 보이지 않습니다. 다음 문제를 열기 전까지 대기 화면이나 직전 결과가 유지됩니다."}
             </p>
           </section>
           <div className="admin-grid">

@@ -39,7 +39,117 @@ test("a fresh event starts without configuration", async () => {
 
 async function openEvent() {
   await service.start();
+  await service.advance(0, 1);
 }
+
+test("participants wait for the operator to open each question and results close its answers", async () => {
+  await service.start();
+  const a = await register(1);
+  const b = await register(2);
+  assert.equal((await service.getPublicEvent()).progressStep, 0);
+  await assert.rejects(() => service.submitAnswer(a.id, 1, 0), { status: 409 });
+  await assert.rejects(() => service.reveal(1, 1), { status: 409 });
+  await Promise.all([service.advance(0, 1), service.advance(0, 1)]);
+  assert.equal((await service.getPublicEvent()).progressStep, 1);
+  assert.deepEqual((await service.getPublicEvent()).revealedQuestions, []);
+  await service.submitAnswer(a.id, 1, 0);
+  await Promise.all([service.advance(1, 1), service.advance(1, 1)]);
+  assert.equal((await service.getPublicEvent()).progressStep, 2);
+  assert.deepEqual((await service.getPublicEvent()).revealedQuestions, [1]);
+  await assert.rejects(() => service.submitAnswer(b.id, 1, 0), { status: 409 });
+  await assert.rejects(() => service.submitAnswer(a.id, 2, 0), { status: 409 });
+  await service.advance(0, 1); // A delayed retry cannot open question two.
+  assert.equal((await service.getPublicEvent()).progressStep, 2);
+  await assert.rejects(() => service.advance(4, 1), { status: 409 });
+  await service.advance(2, 1);
+  await service.submitAnswer(a.id, 2, 1);
+  // Missing a timed question does not strand the participant; it remains unanswered.
+  await service.submitAnswer(b.id, 2, 2);
+  assert.deepEqual((await service.getParticipant(b.id)).answers, [
+    { questionId: 2, optionIndex: 2, points: null },
+  ]);
+  assert.equal((await service.getParticipant(b.id)).completed, false);
+  await service.reset(1);
+  assert.equal((await service.getPublicEvent()).progressStep, 0);
+  await assert.rejects(() => service.advance(2, 1), { status: 409 });
+});
+
+test("the sequential migration resumes after already revealed questions without deleting records", async (t) => {
+  const legacy = await createTestDatabase(4);
+  t.after(() => legacy.dispose());
+  const id = "1234abcd-0000-4000-8000-000000000001";
+  await legacy.db.batch([
+    legacy.db.prepare("INSERT INTO events (id,status,round,revealed_questions) VALUES (1,'open',4,3)"),
+    legacy.db.prepare("INSERT INTO participants (id,name,token_hash,expires_at,consent_version,created_at) VALUES (?,?,?,?,?,?)")
+      .bind(id, "기존 참가자", "a".repeat(64), Date.now() + 60000, 0, new Date().toISOString()),
+    ...[1, 2].map((questionId) => legacy.db.prepare(
+      "INSERT INTO answers (participant_id,question_id,option_index,created_at) VALUES (?,?,0,?)",
+    ).bind(id, questionId, new Date().toISOString())),
+  ]);
+  await legacy.migrate();
+  const upgraded = new EventService(legacy.db, true);
+  const event = await upgraded.getPublicEvent();
+  assert.equal(event.round, 4);
+  assert.equal(event.progressStep, 4);
+  assert.deepEqual(event.revealedQuestions, [1, 2]);
+  assert.equal((await upgraded.getParticipant(id)).answers.length, 2);
+  await assert.rejects(() => upgraded.submitAnswer(id, 3, 0, 4), { status: 409 });
+  await upgraded.advance(4, 4);
+  assert.equal((await upgraded.submitAnswer(id, 3, 0, 4)).revealed, false);
+});
+
+test("an answer racing with result publication is included before release or rejected", async () => {
+  await service.start();
+  const a = await register(1);
+  await service.advance(0, 1);
+  const [submitted] = await Promise.allSettled([
+    service.submitAnswer(a.id, 1, 0, 1),
+    service.advance(1, 1),
+  ]);
+  const result = (await service.getAdminSnapshot()).distributions[0];
+  assert.equal(result.total, submitted.status === "fulfilled" ? 1 : 0);
+  const b = await register(2);
+  await assert.rejects(() => service.submitAnswer(b.id, 1, 1, 1), { status: 409 });
+  assert.deepEqual((await service.getAdminSnapshot()).distributions[0], result);
+});
+
+test("nonconsecutive legacy reveals never reopen an accepting question", async (t) => {
+  const legacy = await createTestDatabase(4);
+  t.after(() => legacy.dispose());
+  const id = "1234abcd-0000-4000-8000-000000000001";
+  await legacy.db.batch([
+    legacy.db.prepare("INSERT INTO events (id,status,revealed_questions) VALUES (1,'open',2)"),
+    legacy.db.prepare("INSERT INTO participants (id,name,token_hash,expires_at,consent_version,created_at) VALUES (?,?,?,?,?,?)")
+      .bind(id, "기존 참가자", "a".repeat(64), Date.now() + 60000, 0, new Date().toISOString()),
+    legacy.db.prepare("INSERT INTO answers (participant_id,question_id,option_index,created_at) VALUES (?,1,0,?)")
+      .bind(id, new Date().toISOString()),
+  ]);
+  await legacy.migrate();
+  const upgraded = new EventService(legacy.db);
+  assert.equal((await upgraded.getPublicEvent()).progressStep, 1);
+  await upgraded.advance(1, 1);
+  await upgraded.advance(2, 1);
+  assert.equal((await upgraded.getPublicEvent()).progressStep, 4);
+  assert.deepEqual((await upgraded.getPublicEvent()).revealedQuestions, [1, 2]);
+  await assert.rejects(() => upgraded.submitAnswer(id, 2, 0, 1), { status: 409 });
+  await upgraded.advance(4, 1);
+  assert.equal((await upgraded.submitAnswer(id, 3, 0, 1)).revealed, false);
+});
+
+test("closed rounds can publish remaining results sequentially without reopening answers", async () => {
+  await openEvent();
+  const a = await register(1);
+  await service.submitAnswer(a.id, 1, 0);
+  await service.close(1);
+  await service.advance(1, 1);
+  for (let questionId = 2; questionId <= 10; questionId++) {
+    const state = await service.advance(questionId * 2 - 2, 1);
+    assert.equal(state.progressStep, questionId * 2);
+    assert.equal(state.status, "closed");
+    await assert.rejects(() => service.submitAnswer(a.id, questionId, 0, 1), { status: 409 });
+  }
+  assert.equal((await service.getParticipant(a.id)).score, 0);
+});
 
 test("registration retries recover one record while duplicate nicknames receive separate participant codes", async () => {
   await openEvent();
@@ -198,6 +308,8 @@ test("answers wait for their question's reveal before showing points or advancin
   assert.deepEqual(visible.counts, [1, 1, 0, 0]);
   assert.deepEqual(visible.percentages, [50, 50, 0, 0]);
   assert.deepEqual(visible.points, [1, 1, 5, 5]);
+  await assert.rejects(() => service.submitAnswer(a.id, 2, 0), { status: 409 });
+  await service.advance(2, 1);
   const second = await service.submitAnswer(a.id, 2, 0);
   assert.equal(second.revealed, false);
   assert.deepEqual(second.points, []);
@@ -233,16 +345,16 @@ test("admin views and CSV cannot disclose unreleased results, even after closing
   assert.deepEqual(partial.distributions[0].points, [1, 1, 5, 5]);
   assert.deepEqual(partial.distributions[1].points, []);
   assert.ok(partial.participants.every((person) => person.score === null));
-  for (let questionId = 2; questionId <= 10; questionId++) await service.reveal(questionId, 1);
-  const publicScores = await service.getAdminSnapshot();
-  assert.deepEqual(publicScores.participants.map((person) => person.score), [1, 1]);
-  assert.match(await service.exportCsv(), /"1","1","확정"/);
+  const nextResult = await service.advance(2, 1);
+  assert.equal(nextResult.status, "closed");
+  assert.equal(nextResult.progressStep, 4);
 });
 
 test("drawing cannot disclose the last unreleased score", async () => {
   await openEvent();
   const a = await register(1);
   for (let questionId = 1; questionId <= 10; questionId++) {
+    if (questionId > 1) await service.advance(questionId * 2 - 2, 1);
     await service.submitAnswer(a.id, questionId, 0);
     if (questionId < 10) await service.reveal(questionId, 1);
   }
@@ -262,7 +374,10 @@ for (const surface of ["participant", "distribution", "admin", "CSV"] as const) 
     await openEvent();
     const previous = await register(1);
     await service.submitAnswer(previous.id, 1, 0);
-    for (let questionId = 1; questionId <= 10; questionId++) await service.reveal(questionId, 1);
+    for (let questionId = 1; questionId <= 10; questionId++) {
+      if (questionId > 1) await service.advance(questionId * 2 - 2, 1);
+      await service.reveal(questionId, 1);
+    }
     let resetTriggered = false;
     const racing = new EventService({
       prepare(sql: string) {
@@ -275,6 +390,7 @@ for (const surface of ["participant", "distribution", "admin", "CSV"] as const) 
                   resetTriggered = true;
                   await service.reset(1);
                   const next = await register(2);
+                  await service.advance(0, 2);
                   await service.submitAnswer(next.id, 1, 1, 2);
                 }
                 return Reflect.apply(target.all, target, args);
@@ -299,16 +415,20 @@ for (const surface of ["participant", "distribution", "admin", "CSV"] as const) 
   });
 }
 
-test("reveals persist independently, validate their target, and reset with the round", async () => {
+test("legacy reveals respect the sequential operator controls and reset with the round", async () => {
   await assert.rejects(() => service.reveal(1, 1), { status: 409 });
   await openEvent();
   for (const questionId of [0, 11, 1.5])
     await assert.rejects(() => service.reveal(questionId, 1), { status: 400 });
-  await Promise.all([service.reveal(1, 1), service.reveal(2, 1), service.reveal(1, 1)]);
-  assert.deepEqual((await new EventService(db).getPublicEvent()).revealedQuestions, [1, 2]);
-  await Promise.allSettled([service.reveal(3, 1), service.reset(1)]);
+  await assert.rejects(() => service.reveal(2, 1), { status: 409 });
+  await Promise.all([service.reveal(1, 1), service.reveal(1, 1)]);
+  assert.deepEqual((await new EventService(db).getPublicEvent()).revealedQuestions, [1]);
+  await service.advance(2, 1);
+  await Promise.allSettled([service.reveal(2, 1), service.reset(1)]);
   assert.deepEqual((await service.getPublicEvent()).revealedQuestions, []);
   await assert.rejects(() => service.reveal(1, 1), { status: 409 });
+  await assert.rejects(() => service.reveal(1, 2), { status: 409 });
+  await service.advance(0, 2);
   await service.reveal(1, 2);
   assert.deepEqual((await service.getPublicEvent()).revealedQuestions, [1]);
 });
@@ -349,6 +469,7 @@ test("only complete participants are eligible and repeat or concurrent draws kee
   const b = await register(2);
   await register(3);
   for (let q = 1; q <= 10; q++) {
+    if (q > 1) await service.advance(q * 2 - 2, 1);
     await service.submitAnswer(a.id, q, 0);
     await service.submitAnswer(b.id, q, 1);
     await service.reveal(q, 1);
@@ -380,6 +501,7 @@ test("reset clears a finished event and lets the same browser participate in a f
   assert.equal((await service.getPublicEvent()).round, 1);
   const previous = await register(1);
   for (let questionId = 1; questionId <= 10; questionId++) {
+    if (questionId > 1) await service.advance(questionId * 2 - 2, 1);
     await service.submitAnswer(previous.id, questionId, 0);
     await service.reveal(questionId, 1);
   }
@@ -389,6 +511,7 @@ test("reset clears a finished event and lets the same browser participate in a f
   const restarted = await service.getAdminSnapshot();
   assert.equal(restarted.event.status, "open");
   assert.equal(restarted.event.round, 2);
+  assert.equal(restarted.event.progressStep, 0);
   assert.deepEqual(restarted.event.revealedQuestions, []);
   assert.equal(restarted.event.closedAt, null);
   assert.equal(restarted.event.participantCount, 0);
@@ -399,12 +522,14 @@ test("reset clears a finished event and lets the same browser participate in a f
   assert.equal(await service.getParticipantByToken("1".padStart(64, "0")), null);
   const next = await register(1);
   assert.notEqual(next.id, previous.id);
+  await service.advance(0, 2);
   const answer = await service.submitAnswer(next.id, 1, 2);
   assert.deepEqual(answer.counts, []);
   assert.equal(answer.final, false);
   await service.reveal(1, 2);
   assert.deepEqual((await service.getDistribution(next.id, 1)).counts, [0, 0, 1, 0]);
   for (let questionId = 2; questionId <= 10; questionId++) {
+    await service.advance(questionId * 2 - 2, 2);
     await service.submitAnswer(next.id, questionId, 2);
     await service.reveal(questionId, 2);
   }
@@ -421,6 +546,7 @@ test("duplicate resets and stale controls cannot clear or close the new round", 
   await Promise.allSettled([service.close(1), service.reset(1)]);
   assert.equal((await service.getPublicEvent()).status, "open");
   const next = await register(1);
+  await service.advance(0, 2);
   await service.submitAnswer(next.id, 1, 2);
   await Promise.all([service.reset(1), service.reset(1)]);
   assert.equal((await service.getPublicEvent()).round, 2);

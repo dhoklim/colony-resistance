@@ -8,6 +8,7 @@ export type Settings = {
 export type PublicEvent = {
   status: EventStatus;
   round: number;
+  progressStep: number;
   revealedQuestions: number[];
   settings: Settings;
   participantCount: number;
@@ -17,6 +18,7 @@ export type PublicEvent = {
   publicAdmin: boolean;
 };
 export type Distribution = {
+  round: number;
   questionId: number;
   counts: number[];
   total: number;
@@ -28,6 +30,7 @@ export type Distribution = {
   updatedAt: string;
 };
 export type ParticipantSnapshot = {
+  round: number;
   displayName: string;
   code: string;
   answers: { questionId: number; optionIndex: number; points: number | null }[];

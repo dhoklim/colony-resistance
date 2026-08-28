@@ -15,6 +15,7 @@ import { AppError, isRecord } from "./errors";
 type EventRow = {
   status: EventStatus;
   round: number;
+  progress_step: number;
   revealed_questions: number;
   settings: string;
   privacy_version: number;
@@ -100,6 +101,7 @@ export class EventService {
     return {
       status: event.status,
       round: event.round,
+      progressStep: event.progress_step,
       revealedQuestions: questions.filter((question) => isRevealed(event, question.id)).map((question) => question.id),
       settings: JSON.parse(event.settings) as Settings,
       participantCount: counts?.participants ?? 0,
@@ -143,9 +145,41 @@ export class EventService {
         .prepare("DELETE FROM participants WHERE EXISTS (SELECT 1 FROM events WHERE id = 1 AND round = ?)")
         .bind(expectedRound),
       this.db
-        .prepare("UPDATE events SET status = 'open', round = round + 1, revealed_questions = 0, final_counts = NULL, closed_at = NULL WHERE id = 1 AND round = ?")
+        .prepare("UPDATE events SET status = 'open', round = round + 1, progress_step = 0, revealed_questions = 0, final_counts = NULL, closed_at = NULL WHERE id = 1 AND round = ?")
         .bind(expectedRound),
     ]);
+    return this.getPublicEvent();
+  }
+
+  async advance(expectedStep: number, expectedRound: number): Promise<PublicEvent> {
+    if (!Number.isInteger(expectedStep) || expectedStep < 0 || expectedStep >= questions.length * 2)
+      throw new AppError(400, "진행 단계를 확인해 주세요.");
+    const event = await this.event();
+    assertCurrentRound(event, expectedRound);
+    // Retries and other operator tabs must never skip a question or its result.
+    if (expectedStep < event.progress_step) return this.getPublicEvent();
+    if (expectedStep !== event.progress_step)
+      throw new AppError(409, "진행 상태가 바뀌었습니다. 새로고침 후 다시 눌러 주세요.");
+    if (event.status !== "open" && event.status !== "closed")
+      throw new AppError(409, event.status === "draft"
+        ? "행사를 시작한 뒤 문제를 공개해 주세요."
+        : "진행이 끝난 행사입니다.");
+    const questionBit = 1 << Math.floor(expectedStep / 2);
+    // Closed rounds publish results only. Legacy out-of-order releases must not
+    // reopen voting; skip their accepting phase while retaining the public result.
+    await this.db.prepare(
+      `UPDATE events SET progress_step = progress_step + CASE
+         WHEN progress_step % 2 = 0 AND (status = 'closed' OR (revealed_questions & ?) <> 0) THEN 2
+         ELSE 1 END,
+       revealed_questions = revealed_questions | CASE
+         WHEN status = 'closed' OR progress_step % 2 = 1 THEN ? ELSE 0 END
+       WHERE id = 1 AND round = ? AND progress_step = ?
+       AND status IN ('open', 'closed')`,
+    ).bind(questionBit, questionBit, event.round, expectedStep).run();
+    const current = await this.event();
+    assertCurrentRound(current, event.round);
+    if (current.progress_step === expectedStep)
+      throw new AppError(409, "진행 상태가 바뀌었습니다. 새로고침 후 다시 눌러 주세요.");
     return this.getPublicEvent();
   }
 
@@ -154,15 +188,11 @@ export class EventService {
       throw new AppError(400, "공개할 문항을 확인해 주세요.");
     const event = await this.event();
     assertCurrentRound(event, expectedRound);
-    if (event.status === "draft")
-      throw new AppError(409, "행사를 시작한 뒤 점수를 공개해 주세요.");
-    // Bitwise OR keeps independent, concurrent reveals from overwriting each other.
-    await this.db
-      .prepare("UPDATE events SET revealed_questions = revealed_questions | ? WHERE id = 1 AND round = ? AND status <> 'draft'")
-      .bind(1 << (questionId - 1), event.round)
-      .run();
-    assertCurrentRound(await this.event(), event.round);
-    return this.getPublicEvent();
+    if (isRevealed(event, questionId)) return this.getPublicEvent();
+    // Cached operator pages may reveal only the currently opened question.
+    if (event.progress_step !== questionId * 2 - 1)
+      throw new AppError(409, "현재 공개된 문제의 결과만 공개할 수 있습니다. 운영실을 새로고침해 주세요.");
+    return this.advance(event.progress_step, event.round);
   }
 
   async register(
@@ -252,8 +282,8 @@ export class EventService {
   }
 
   async getParticipant(id: string): Promise<ParticipantSnapshot> {
-    const participant = await this.participant(id);
     const event = await this.event();
+    const participant = await this.participant(id);
     const counts = await this.counts(event);
     const rows = await this.db
       .prepare(
@@ -269,6 +299,7 @@ export class EventService {
     }));
     assertCurrentRound(await this.event(), event.round);
     return {
+      round: event.round,
       displayName: participant.name,
       code: participant.id.slice(0, 8).toUpperCase(),
       answers,
@@ -299,19 +330,18 @@ export class EventService {
     const event = await this.event();
     assertCurrentRound(event, expectedRound);
     const now = new Date().toISOString();
-    // The status and sequence checks live inside the write, so close/submit races cannot admit a late vote.
+    // Opening and result release are checked inside the write, including races.
     await this.db.batch([
       this.db
         .prepare(
           `INSERT INTO answers (participant_id,question_id,option_index,created_at)
         SELECT ?,?,?,? FROM events WHERE id = 1 AND status = 'open' AND round = ?
-        AND (? = 1 OR (revealed_questions & ?) <> 0)
+        AND progress_step = ? AND (revealed_questions & ?) = 0
         AND EXISTS (SELECT 1 FROM participants WHERE id = ?)
-        AND (SELECT COUNT(*) FROM answers WHERE participant_id = ?) = ?
         ON CONFLICT (participant_id,question_id) DO NOTHING`,
         )
-        .bind(id, questionId, optionIndex, now, event.round, questionId,
-          questionId === 1 ? 0 : 1 << (questionId - 2), id, id, questionId - 1),
+        .bind(id, questionId, optionIndex, now, event.round, questionId * 2 - 1,
+          1 << (questionId - 1), id),
       this.db
         .prepare(
           `UPDATE participants SET completed_at = ? WHERE id = ? AND completed_at IS NULL
@@ -332,19 +362,21 @@ export class EventService {
         409,
         current.status !== "open"
           ? "참여가 마감되어 답변을 저장하지 못했습니다."
-          : questionId > 1 && !isRevealed(current, questionId - 1)
-            ? "운영자가 이전 문항의 점수를 공개하면 다음 문항에 답할 수 있습니다."
-            : "문항 순서대로 답변해 주세요.",
+          : current.progress_step < questionId * 2 - 1
+            ? "운영자가 이 문제를 공개하면 답할 수 있습니다."
+            : "이 문제의 응답이 마감되었습니다. 다음 문제 공개를 기다려 주세요.",
       );
     }
     if (answer.optionIndex !== optionIndex)
       throw new AppError(409, "이미 제출한 답변은 변경할 수 없습니다.");
-    return this.getDistribution(id, questionId);
+    return this.getDistribution(id, questionId, event.round);
   }
 
-  async getDistribution(id: string, questionId: number): Promise<Distribution> {
+  async getDistribution(id: string, questionId: number, expectedRound?: number): Promise<Distribution> {
     if (!Number.isInteger(questionId) || questionId < 1 || questionId > 10)
       throw new AppError(400, "존재하지 않는 문항입니다.");
+    const event = await this.event();
+    assertCurrentRound(event, expectedRound);
     const answer = await this.db
       .prepare(
         "SELECT option_index AS optionIndex FROM answers WHERE participant_id = ? AND question_id = ?",
@@ -356,12 +388,12 @@ export class EventService {
         403,
         "답변을 제출한 문항의 결과만 확인할 수 있습니다.",
       );
-    const event = await this.event();
     const counts = (await this.counts(event))[questionId - 1];
     const total = counts.reduce((sum, count) => sum + count, 0);
     const revealed = isRevealed(event, questionId);
     assertCurrentRound(await this.event(), event.round);
     return {
+      round: event.round,
       questionId,
       counts: revealed ? counts : [],
       total,

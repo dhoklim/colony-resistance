@@ -18,6 +18,12 @@ export default function Participation() {
   const answered = flow.participant?.answers.length ?? 0;
   const waiting =
     flow.event && !flow.participant && flow.event.status !== "open";
+  const finalQuestion = flow.event && flow.event.progressStep >= 20 && flow.distribution?.revealed ? (
+    <div className="final-question">
+      <QuestionStage question={questions[flow.questionId - 1]} selection={flow.selection}
+        distribution={flow.distribution} pending={false} onSelect={flow.select} onSubmit={flow.submit} />
+    </div>
+  ) : null;
   return (
     <div className="experiment-page">
       <header className="site-header shell">
@@ -95,8 +101,26 @@ export default function Participation() {
               ) : flow.phase === "complete" &&
                 flow.participant &&
                 flow.event ? (
-                <Completion participant={flow.participant} event={flow.event} />
+                <>
+                  {finalQuestion}
+                  <Completion participant={flow.participant} event={flow.event} />
+                </>
+              ) : flow.phase === "waiting" || flow.phase === "missed" ? (
+                <section className="state-panel panel" aria-live="polite">
+                  <Clock3 className="state-icon" size={42} strokeWidth={1} aria-hidden="true" />
+                  <p className="eyebrow">WAITING FOR OPERATOR</p>
+                  <h1>{flow.phase === "waiting"
+                    ? "첫 번째 문제 공개를 기다리고 있습니다."
+                    : `${flow.questionId}번 문제의 응답이 마감되었습니다.`}</h1>
+                  <p>{flow.phase === "waiting"
+                    ? `${flow.participant?.displayName}님, 입장이 완료되었습니다.`
+                    : "제출하지 않은 답변은 저장되지 않습니다."}<br />
+                    운영자가 문제를 공개하면 자동으로 넘어갑니다.</p>
+                  <p className="small-note">이 화면을 열어 두고 기다려 주세요.</p>
+                </section>
               ) : flow.phase === "closed" ? (
+                <>
+                {finalQuestion}
                 <section className="state-panel panel">
                   <p className="eyebrow">EXPERIMENT CLOSED</p>
                   <h1>응답 접수가 마감되었습니다.</h1>
@@ -110,6 +134,7 @@ export default function Participation() {
                     <ArrowUpRight size={16} aria-hidden="true" />
                   </Link>
                 </section>
+                </>
               ) : (
                 <>
                   <div className="progress-heading">
@@ -133,8 +158,10 @@ export default function Participation() {
                     pending={flow.pending}
                     onSelect={flow.select}
                     onSubmit={flow.submit}
-                    onNext={flow.next}
                   />
+                  {flow.participant && flow.participant.answers.filter((answer) => answer.questionId < flow.questionId).length < flow.questionId - 1 && (
+                    <p className="small-note">이전 문항은 응답이 마감되었습니다. 남은 문항에 참여할 수 있으며, 추첨은 10문항 완료자 대상입니다.</p>
+                  )}
                 </>
               )}
             </>

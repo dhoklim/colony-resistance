@@ -123,6 +123,11 @@ export class EventApi {
       if (body.action === "start") await this.service.start(round);
       else if (body.action === "close") await this.service.close(round);
       else if (body.action === "draw") await this.service.draw(round);
+      else if (body.action === "advance") {
+        if (typeof body.step !== "number")
+          throw new AppError(400, "진행 단계를 확인해 주세요.");
+        await this.service.advance(body.step, round);
+      }
       else if (body.action === "reveal") {
         if (typeof body.questionId !== "number")
           throw new AppError(400, "공개할 문항을 확인해 주세요.");
@@ -182,6 +187,7 @@ export class EventApi {
         "참여 세션이 만료되었습니다. 운영자에게 문의해 주세요.",
       );
     if (request.method === "GET") {
+      const expectedRound = new URL(request.url).searchParams.get("round");
       const questionId = Number(
         new URL(request.url).searchParams.get("questionId"),
       );
@@ -189,6 +195,7 @@ export class EventApi {
         distribution: await this.service.getDistribution(
           participant.id,
           questionId,
+          expectedRound === null ? undefined : Number(expectedRound),
         ),
       });
     }

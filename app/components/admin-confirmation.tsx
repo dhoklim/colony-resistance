@@ -7,7 +7,7 @@ export const actionCopy = {
   start: {
     title: "이벤트를 시작할까요?",
     button: "행사 시작 확정",
-    description: "참가 등록과 답변 제출을 시작합니다.",
+    description: "참가 접수를 시작합니다. 입장한 참가자는 운영자가 첫 문제를 공개할 때까지 대기합니다.",
     success: "이벤트를 시작했습니다. 참가 링크를 공유해 주세요.",
   },
   close: {

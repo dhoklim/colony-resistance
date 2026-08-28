@@ -12,7 +12,6 @@ export function QuestionStage({
   pending,
   onSelect,
   onSubmit,
-  onNext,
 }: {
   question: Question;
   selection: number | null;
@@ -20,7 +19,6 @@ export function QuestionStage({
   pending: boolean;
   onSelect: (choice: number) => void;
   onSubmit: () => Promise<void>;
-  onNext: () => void;
 }) {
   const heading = useRef<HTMLHeadingElement>(null);
   const revealed = distribution?.revealed === true;
@@ -86,7 +84,7 @@ export function QuestionStage({
             <div>
               <p className="live-label">
                 <Radio size={12} aria-hidden="true" />
-                {distribution.final ? "최종 집계" : "실시간 집계"}{" "}
+                문항 집계{" "}
                 <span>· {distribution.total}명 응답</span>
               </p>
               <p className="chosen-ratio">
@@ -97,7 +95,7 @@ export function QuestionStage({
               </p>
             </div>
             <div className="earned-points">
-              <span>{distribution.final ? "확정 점수" : "잠정 점수"}</span>
+              <span>획득 점수</span>
               <strong>
                 +{distribution.points[distribution.selectedIndex]}
                 <small>점</small>
@@ -114,21 +112,17 @@ export function QuestionStage({
           )}
           <p className="result-disclaimer">
             {!revealed
-              ? "결과가 공개되면 화면이 자동으로 바뀌며 다음 문항으로 진행할 수 있습니다."
+              ? "운영자가 결과를 공개하면 비율과 점수가 자동으로 표시됩니다."
               : distribution.final
                 ? "행사가 마감되어 선택 비율과 점수가 확정되었습니다."
-                : "선택 비율과 점수는 참가자들의 응답에 따라 달라집니다."}
+                : "이 문항의 응답이 마감되었습니다."}
           </p>
-          <button className="button button-primary full-width" disabled={!revealed} onClick={onNext}>
-            {!revealed
-              ? "결과 공개 대기 중"
-              : question.id === 10
-                ? "나의 저항도 확인"
-                : distribution.final
-                  ? "마감 안내 확인"
-                  : "다음 상황으로"}
-            <ArrowRight size={18} aria-hidden="true" />
-          </button>
+          {revealed && !distribution.final && question.id < 10 && (
+            <p className="next-question-waiting" role="status">
+              <Clock3 size={17} aria-hidden="true" />
+              운영자가 {question.id + 1}번 문제를 공개하면 자동으로 넘어갑니다.
+            </p>
+          )}
         </>
       ) : (
         <>

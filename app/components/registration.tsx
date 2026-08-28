@@ -25,8 +25,10 @@ export function Registration({
         기록할 준비가 되었나요?
       </h1>
       <p className="section-description">
-        닉네임을 정하고 10개의 상황에 답해 주세요.
+        닉네임을 정하고 입장해 주세요.
+        <br />운영자가 공개하는 문제에 차례로 답합니다.
       </p>
+      {event.progressStep >= 2 && <p className="small-note">이미 진행 중인 행사입니다. 지난 문항에는 답할 수 없으며, 추첨은 10문항 완료자 대상입니다.</p>}
       <form
         onSubmit={(submit) => {
           submit.preventDefault();

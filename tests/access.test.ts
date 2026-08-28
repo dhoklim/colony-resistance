@@ -103,7 +103,14 @@ test("a public one-use event needs only nicknames and start, close and draw acti
   assert.equal(exported.includes("학번"), false);
   await publicApi.handle("admin", request("/api/admin?action=close"));
   assert.equal((await publicService.getPublicEvent()).status, "open");
+  const lobbyAnswer = await publicApi.handle("answer",
+    request("/api/answer", { questionId: 1, optionIndex: 0 }, { cookie }));
+  assert.equal(lobbyAnswer.status, 409);
   for (let questionId = 1; questionId <= 10; questionId++) {
+    const opened = await publicApi.handle("admin", request("/api/admin", {
+      action: "advance", step: questionId * 2 - 2, round: 1,
+    }));
+    assert.equal(opened.status, 200);
     const answered = await publicApi.handle(
       "answer",
       request("/api/answer", { questionId, optionIndex: 0 }, { cookie }),
@@ -147,7 +154,7 @@ test("a public one-use event needs only nicknames and start, close and draw acti
     }
     const revealed = await publicApi.handle(
       "admin",
-      request("/api/admin", { action: "reveal", questionId, round: 1 }),
+      request("/api/admin", { action: "advance", step: questionId * 2 - 1, round: 1 }),
     );
     assert.equal(revealed.status, 200);
     const visible = await publicApi.handle(
@@ -192,6 +199,7 @@ test("a public one-use event needs only nicknames and start, close and draw acti
   const nextRound = (await reset.json()) as AdminSnapshot;
   assert.equal(nextRound.event.status, "open");
   assert.equal(nextRound.event.round, 2);
+  assert.equal(nextRound.event.progressStep, 0);
   assert.deepEqual(nextRound.event.revealedQuestions, []);
   assert.equal(nextRound.event.participantCount, 0);
   assert.equal(nextRound.draw, null);
@@ -232,6 +240,7 @@ test("a public one-use event needs only nicknames and start, close and draw acti
     ((await untouched.json()) as { participant: ParticipantSnapshot }).participant.answers,
     [],
   );
+  await publicApi.handle("admin", request("/api/admin", { action: "advance", step: 0, round: 2 }));
   const newAnswer = await publicApi.handle(
     "answer",
     request("/api/answer", { questionId: 1, optionIndex: 1, round: 2 }, { cookie }),
@@ -332,6 +341,7 @@ test("malformed and oversized JSON return bounded client errors", async () => {
 });
 test("registration uses an HttpOnly session cookie and public responses omit other participants", async () => {
   await service.start();
+  await service.advance(0, 1);
   const initial = await api().handle(
     "participant",
     request("/api/participant"),
@@ -448,6 +458,7 @@ test("two independent HTTP sessions finish the event, receive final scores, and 
   }
   const cookies = await Promise.all([enter("검증 A"), enter("검증 B")]);
   for (let questionId = 1; questionId <= 10; questionId++) {
+    await service.advance(questionId * 2 - 2, 1);
     const responses = await Promise.all(
       cookies.map((cookie, optionIndex) =>
         api().handle(
@@ -521,6 +532,7 @@ test("GitHub Pages uses an explicit CORS origin and bearer sessions without thir
   );
   await service.start();
   const pagesOrigin = "https://dhoklim.github.io";
+  await service.advance(0, 1);
   const pagesApi = new EventApi(service, {
     canonicalOrigin: origin,
     participantOrigin: pagesOrigin,
