@@ -111,24 +111,10 @@ export class EventApi {
         60000,
       );
       const body = await readJson(request);
-      if (body.action === "settings")
-        await this.service.updateSettings(body.settings);
-      else {
-        const confirmations: Record<string, string> = {
-          start: "행사 시작",
-          close: "응답 마감",
-          draw: "당첨자 추첨",
-        };
-        if (
-          typeof body.action !== "string" ||
-          !Object.hasOwn(confirmations, body.action) ||
-          body.confirmation !== confirmations[body.action]
-        )
-          throw new AppError(400, "운영 작업을 확인한 뒤 실행해 주세요.");
-        if (body.action === "start") await this.service.start();
-        if (body.action === "close") await this.service.close();
-        if (body.action === "draw") await this.service.draw();
-      }
+      if (body.action === "start") await this.service.start();
+      else if (body.action === "close") await this.service.close();
+      else if (body.action === "draw") await this.service.draw();
+      else throw new AppError(400, "진행할 작업을 확인해 주세요.");
       return json(await this.service.getAdminSnapshot());
     } catch (error) {
       return errorResponse(error);

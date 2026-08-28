@@ -22,7 +22,6 @@ type EventRow = {
 type ParticipantRow = {
   id: string;
   name: string;
-  student_id: string;
   expires_at: number;
   created_at: string;
   completed_at: string | null;
@@ -31,57 +30,6 @@ type CountRow = { questionId: number; optionIndex: number; count: number };
 type AnswerRow = { questionId: number; optionIndex: number };
 type EntryRow = ParticipantRow & { answerData: string };
 const SESSION_LIFETIME = 30 * 24 * 60 * 60 * 1000;
-
-function normalizeSettings(input: unknown): Settings {
-  if (
-    !isRecord(input) ||
-    typeof input.organizer !== "string" ||
-    typeof input.privacyContact !== "string" ||
-    typeof input.instagramUrl !== "string" ||
-    typeof input.retentionDays !== "number"
-  ) {
-    throw new AppError(400, "운영 안내를 모두 입력해 주세요.");
-  }
-  const { retentionDays } = input;
-  const organizer = input.organizer.trim();
-  const privacyContact = input.privacyContact.trim();
-  const instagramUrl = input.instagramUrl.trim();
-  if (
-    !organizer ||
-    organizer.length > 80 ||
-    !privacyContact ||
-    privacyContact.length > 160 ||
-    !Number.isInteger(retentionDays) ||
-    retentionDays < 1 ||
-    retentionDays > 365
-  ) {
-    throw new AppError(
-      400,
-      "운영 주체·문의처와 1~365일 범위의 보관 기간을 입력해 주세요.",
-    );
-  }
-  if (instagramUrl) {
-    let url: URL;
-    try {
-      url = new URL(instagramUrl);
-    } catch {
-      throw new AppError(400, "올바른 인스타그램 주소를 입력해 주세요.");
-    }
-    if (
-      url.protocol !== "https:" ||
-      !["instagram.com", "www.instagram.com"].includes(url.hostname) ||
-      url.username ||
-      url.password ||
-      url.port
-    ) {
-      throw new AppError(
-        400,
-        "https://www.instagram.com/ 형식의 주소를 입력해 주세요.",
-      );
-    }
-  }
-  return { organizer, privacyContact, retentionDays, instagramUrl };
-}
 
 function makeCounts(rows: CountRow[]): number[][] {
   const counts = questions.map(() => [0, 0, 0, 0]);
@@ -141,29 +89,11 @@ export class EventService {
     };
   }
 
-  async updateSettings(input: unknown): Promise<PublicEvent> {
-    const settings = normalizeSettings(input);
-    await this.event();
-    const result = await this.db
-      .prepare(
-        "UPDATE events SET settings = ?, privacy_version = privacy_version + 1 WHERE id = 1 AND status = 'draft'",
-      )
-      .bind(JSON.stringify(settings))
-      .run();
-    if (!result.meta.changes)
-      throw new AppError(
-        409,
-        "행사 시작 후에는 운영 안내를 변경할 수 없습니다.",
-      );
-    return this.getPublicEvent();
-  }
-
   async start(): Promise<PublicEvent> {
     const event = await this.event();
     if (event.status === "open") return this.getPublicEvent();
     if (event.status !== "draft")
       throw new AppError(409, "마감된 행사는 다시 시작할 수 없습니다.");
-    normalizeSettings(JSON.parse(event.settings));
     await this.db
       .prepare(
         "UPDATE events SET status = 'open' WHERE id = 1 AND status = 'draft'",
@@ -173,49 +103,22 @@ export class EventService {
   }
 
   async register(input: unknown, tokenHash: string): Promise<ParticipantRow> {
-    if (
-      !isRecord(input) ||
-      typeof input.name !== "string" ||
-      typeof input.studentId !== "string" ||
-      input.consent !== true ||
-      !Number.isInteger(input.privacyVersion)
-    ) {
-      throw new AppError(
-        400,
-        "이름과 학번을 입력하고 개인정보 수집 안내에 동의해 주세요.",
-      );
+    if (!isRecord(input) || typeof input.nickname !== "string") {
+      throw new AppError(400, "닉네임을 입력해 주세요.");
     }
-    if (this.publicAdmin && input.publicAdminConsent !== true)
-      throw new AppError(
-        400,
-        "공개 운영실 안내를 확인해야 합니다. 새로고침 후 이름·학번 등의 공개에 동의해 주세요.",
-      );
-    const name = input.name.trim().normalize("NFC");
-    const studentId = input.studentId
-      .normalize("NFKC")
-      .replace(/[\s-]/g, "")
-      .toUpperCase();
+    const name = input.nickname.trim().normalize("NFC");
     if (
       !name ||
       name.length > 40 ||
       /[\u0000-\u001f\u007f]/.test(name) ||
-      !/^[A-Z0-9]{4,20}$/.test(studentId) ||
       !/^[a-f0-9]{64}$/.test(tokenHash)
     ) {
-      throw new AppError(
-        400,
-        "이름은 40자 이내, 학번은 영문·숫자 4~20자로 입력해 주세요.",
-      );
+      throw new AppError(400, "닉네임은 40자 이내로 입력해 주세요.");
     }
     const event = await this.event();
-    if (input.privacyVersion !== event.privacy_version)
-      throw new AppError(
-        400,
-        "운영 안내가 변경되었습니다. 새로고침 후 다시 동의해 주세요.",
-      );
     const existing = await this.getParticipantByToken(tokenHash);
     if (existing) {
-      if (existing.name !== name || existing.student_id !== studentId)
+      if (existing.name !== name)
         throw new AppError(409, "이 브라우저에서는 이미 참여했습니다.");
       return existing;
     }
@@ -228,28 +131,26 @@ export class EventService {
       );
     await this.db
       .prepare(
-        `INSERT INTO participants (id,name,student_id,token_hash,expires_at,consent_version,created_at)
-      SELECT ?,?,?,?,?,?,? FROM events WHERE id = 1 AND status = 'open' AND privacy_version = ?
+        `INSERT INTO participants (id,name,token_hash,expires_at,consent_version,created_at)
+      SELECT ?,?,?,?,?,? FROM events WHERE id = 1 AND status = 'open'
       ON CONFLICT DO NOTHING`,
       )
       .bind(
         crypto.randomUUID(),
         name,
-        studentId,
         tokenHash,
         Date.now() + SESSION_LIFETIME,
-        event.privacy_version,
+        0, // Nickname-only registration did not use the legacy consent form.
         new Date().toISOString(),
-        event.privacy_version,
       )
       .run();
     const participant = await this.getParticipantByToken(tokenHash);
     if (!participant)
       throw new AppError(
         409,
-        "이미 등록된 학번이거나 참여가 마감되었습니다. 기존 브라우저에서 이어가거나 운영자에게 문의해 주세요.",
+        "참여가 마감되었습니다. 화면을 새로고침해 주세요.",
       );
-    if (participant.name !== name || participant.student_id !== studentId)
+    if (participant.name !== name)
       throw new AppError(409, "이 브라우저에서는 이미 참여했습니다.");
     return participant;
   }
@@ -260,7 +161,7 @@ export class EventService {
     if (!/^[a-f0-9]{64}$/.test(tokenHash)) return null;
     return this.db
       .prepare(
-        "SELECT id,name,student_id,expires_at,created_at,completed_at FROM participants WHERE token_hash = ? AND expires_at > ?",
+        "SELECT id,name,expires_at,created_at,completed_at FROM participants WHERE token_hash = ? AND expires_at > ?",
       )
       .bind(tokenHash, Date.now())
       .first<ParticipantRow>();
@@ -269,7 +170,7 @@ export class EventService {
   private async participant(id: string): Promise<ParticipantRow> {
     const row = await this.db
       .prepare(
-        "SELECT id,name,student_id,expires_at,created_at,completed_at FROM participants WHERE id = ?",
+        "SELECT id,name,expires_at,created_at,completed_at FROM participants WHERE id = ?",
       )
       .bind(id)
       .first<ParticipantRow>();
@@ -412,7 +313,7 @@ export class EventService {
   ): Promise<LeaderboardEntry[]> {
     const rows = await this.db
       .prepare(
-        `SELECT p.id,p.name,p.student_id,p.created_at,p.completed_at,
+        `SELECT p.id,p.name,p.created_at,p.completed_at,
       json_group_array(json_object('questionId',a.question_id,'optionIndex',a.option_index)) FILTER (WHERE a.question_id IS NOT NULL) AS answerData
       FROM participants p LEFT JOIN answers a ON a.participant_id = p.id
       ${completeOnly ? "WHERE p.completed_at IS NOT NULL" : ""}
@@ -425,7 +326,7 @@ export class EventService {
       return {
         id: row.id,
         name: row.name,
-        studentId: row.student_id,
+        code: row.id.slice(0, 8).toUpperCase(),
         completed: answers.length === 10,
         answeredCount: answers.length,
         score: answers.reduce(
@@ -446,7 +347,14 @@ export class EventService {
       .first<{ winners: string; eligible_count: number; drawn_at: string }>();
     return row
       ? {
-          winners: JSON.parse(row.winners) as DrawResult["winners"],
+          winners: (JSON.parse(row.winners) as DrawResult["winners"]).map(
+            (winner) => ({
+              id: winner.id,
+              name: winner.name,
+              code: winner.id.slice(0, 8).toUpperCase(),
+              score: winner.score,
+            }),
+          ),
           eligibleCount: row.eligible_count,
           drawnAt: row.drawn_at,
         }
@@ -476,7 +384,7 @@ export class EventService {
       return {
         id: candidate.id,
         name: candidate.name,
-        studentId: candidate.studentId,
+        code: candidate.code,
         score: candidate.score,
       };
     });
@@ -532,8 +440,7 @@ export class EventService {
     const rows = await this.entries(await this.counts(event));
     const header = [
       "참가코드",
-      "이름",
-      "학번",
+      "닉네임",
       "완료 문항",
       "군체 저항도",
       "점수 기준",
@@ -544,9 +451,8 @@ export class EventService {
       [
         header,
         ...rows.map((row) => [
-          row.id.slice(0, 8).toUpperCase(),
+          row.code,
           row.name,
-          row.studentId,
           String(row.answeredCount),
           String(row.score),
           event.final_counts === null ? "잠정" : "확정",

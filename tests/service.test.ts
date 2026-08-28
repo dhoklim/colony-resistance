@@ -6,20 +6,9 @@ import { createTestDatabase } from "./helpers/d1.ts";
 let database: Awaited<ReturnType<typeof createTestDatabase>>;
 let db: Awaited<ReturnType<typeof createTestDatabase>>["db"];
 let service: EventService;
-const settings = {
-  organizer: "테스트 학과",
-  privacyContact: "test@example.invalid",
-  retentionDays: 30,
-  instagramUrl: "",
-};
 const register = (suffix: number) =>
   service.register(
-    {
-      name: `테스트 ${suffix}`,
-      studentId: `2099${String(suffix).padStart(4, "0")}`,
-      consent: true,
-      privacyVersion: 2,
-    },
+    { nickname: `테스트 ${suffix}` },
     String(suffix).padStart(64, "0"),
   );
 
@@ -41,19 +30,18 @@ beforeEach(async () => {
 });
 after(() => database?.dispose());
 
-test("a fresh event is private-data-free and cannot start without its privacy settings", async () => {
+test("a fresh event starts without configuration", async () => {
   const event = await service.getPublicEvent();
   assert.equal(event.status, "draft");
   assert.equal(event.participantCount, 0);
-  await assert.rejects(() => service.start(), { status: 400 });
+  assert.equal((await service.start()).status, "open");
 });
 
 async function openEvent() {
-  await service.updateSettings(settings);
   await service.start();
 }
 
-test("same-session registration retries recover the existing record; a different session cannot claim it", async () => {
+test("registration retries recover one record while duplicate nicknames receive separate participant codes", async () => {
   await openEvent();
   const a = await register(1);
   const b = await register(1);
@@ -62,29 +50,81 @@ test("same-session registration retries recover the existing record; a different
   await assert.rejects(
     () =>
       service.register(
-        {
-          name: "다른 사람",
-          studentId: "20990001",
-          consent: true,
-          privacyVersion: 2,
-        },
-        "f".repeat(64),
+        { nickname: "다른 사람" },
+        "1".padStart(64, "0"),
       ),
     { status: 409 },
   );
+  const sameNickname = await service.register(
+    { nickname: "테스트 1" },
+    "f".repeat(64),
+  );
+  assert.notEqual(a.id, sameNickname.id);
+  const original = await service.getParticipant(a.id);
+  const other = await service.getParticipant(sameNickname.id);
+  assert.equal(original.displayName, other.displayName);
+  assert.notEqual(original.code, other.code);
+  assert.equal((await service.getPublicEvent()).participantCount, 2);
 });
 
-test("consent, outdated privacy text, and invalid input are rejected before registration", async () => {
+test("empty, invalid and overlong nicknames are rejected before registration", async () => {
   await openEvent();
   for (const input of [
-    { name: "", studentId: "20990001", consent: true, privacyVersion: 2 },
-    { name: "이름", studentId: "x", consent: true, privacyVersion: 2 },
-    { name: "이름", studentId: "20990001", consent: false, privacyVersion: 2 },
-    { name: "이름", studentId: "20990001", consent: true, privacyVersion: 1 },
+    {},
+    { nickname: "" },
+    { nickname: "   " },
+    { nickname: "이름\u0000" },
+    { nickname: "가".repeat(41) },
+    { nickname: 123 },
   ])
     await assert.rejects(() => service.register(input, "a".repeat(64)), {
       status: 400,
     });
+});
+
+test("the nickname migration preserves an ongoing event, existing sessions and saved answers", async (t) => {
+  const legacy = await createTestDatabase(1);
+  t.after(() => legacy.dispose());
+  const id = "1234abcd-0000-4000-8000-000000000001";
+  const tokenHash = "e".repeat(64);
+  await legacy.db.batch([
+    legacy.db.prepare("INSERT INTO events (id,status) VALUES (1,'open')"),
+    legacy.db
+      .prepare(
+        "INSERT INTO participants (id,name,student_id,token_hash,expires_at,consent_version,created_at) VALUES (?,?,?,?,?,?,?)",
+      )
+      .bind(
+        id,
+        "기존 참가자",
+        "20990001",
+        tokenHash,
+        Date.now() + 60000,
+        1,
+        new Date().toISOString(),
+      ),
+    legacy.db
+      .prepare(
+        "INSERT INTO answers (participant_id,question_id,option_index,created_at) VALUES (?,1,2,?)",
+      )
+      .bind(id, new Date().toISOString()),
+  ]);
+  await legacy.migrate();
+  const upgraded = new EventService(legacy.db, true);
+  assert.equal((await upgraded.getPublicEvent()).status, "open");
+  assert.equal((await upgraded.getParticipantByToken(tokenHash))?.id, id);
+  const participant = await upgraded.getParticipant(id);
+  assert.equal(participant.code, "1234ABCD");
+  assert.equal(participant.displayName, "기존 참가자");
+  assert.deepEqual(participant.answers, [
+    { questionId: 1, optionIndex: 2, points: 0 },
+  ]);
+  const columns = await legacy.db.prepare("PRAGMA table_info(participants)").all();
+  assert.equal(
+    columns.results.some((column: { name: string }) => column.name === "student_id"),
+    false,
+  );
+  await upgraded.register({ nickname: "새 참가자" }, "f".repeat(64));
+  assert.equal((await upgraded.getPublicEvent()).participantCount, 2);
 });
 
 test("duplicate and concurrent answer submissions count exactly once and lock the selected answer", async () => {

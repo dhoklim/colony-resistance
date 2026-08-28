@@ -90,7 +90,7 @@ test("a delayed bootstrap in another tab preserves and resumes the registered se
   assert.deepEqual(await firstTab("/api/participant"), { participant });
 });
 
-test("closing the event requires an explicit confirmation and a failed request remains retryable", async (t) => {
+test("operators start without setup and close with a simple retryable confirmation", async (t) => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "https://event.example/",
     pretendToBeVisual: true,
@@ -132,11 +132,11 @@ test("closing the event requires an explicit confirmation and a failed request r
   });
   const initial: AdminSnapshot = {
     event: {
-      status: "open",
+      status: "draft",
       settings: {
-        organizer: "검증 학과",
-        privacyContact: "test@example.invalid",
-        retentionDays: 30,
+        organizer: "",
+        privacyContact: "",
+        retentionDays: 0,
         instagramUrl: "",
       },
       participantCount: 0,
@@ -153,47 +153,51 @@ test("closing the event requires an explicit confirmation and a failed request r
     draw: null,
   };
   const requests: unknown[] = [];
+  let current = initial;
   t.mock.method(
     globalThis,
     "fetch",
     async (_input: unknown, init?: RequestInit) => {
       if (init?.method === "POST") {
         requests.push(JSON.parse(String(init.body)));
-        if (requests.length === 1)
+        if (requests.length === 2)
           return Response.json(
             { error: "연결을 확인해 주세요." },
             { status: 500 },
           );
-        return Response.json({
+        current = {
           ...initial,
           event: {
             ...initial.event,
-            status: "closed",
-            closedAt: new Date().toISOString(),
+            status: requests.length === 1 ? "open" : "closed",
+            closedAt: requests.length === 1 ? null : new Date().toISOString(),
           },
-        });
+        };
       }
-      return Response.json(initial);
+      return Response.json(current);
     },
   );
   const { default: AdminDashboard } =
     await import("../app/components/admin-dashboard.tsx");
-  const view = render(
-    <AdminDashboard initial={initial} />,
-  );
-  assert.ok(view.getByText(/누구나 이름·학번/));
+  const view = render(<AdminDashboard initial={initial} />);
+  assert.equal(view.queryByLabelText("운영 주체"), null);
+  assert.equal(view.queryByLabelText("개인정보 문의처"), null);
+  const start = view.getByRole("button", { name: "이벤트 시작하기" });
+  assert.equal((start as HTMLButtonElement).disabled, false);
+  fireEvent.click(start);
+  await view.findByRole("button", { name: "응답 마감하기" });
+  assert.deepEqual(requests[0], { action: "start" });
+  assert.equal(view.queryByRole("dialog"), null);
   fireEvent.click(view.getByRole("button", { name: "응답 마감하기" }));
   const dialog = view.getByRole("dialog", { name: "응답을 마감할까요?" });
   assert.ok(dialog);
   const confirm = view.getByRole("button", { name: "마감 확정" });
-  assert.equal((confirm as HTMLButtonElement).disabled, true);
-  assert.equal(requests.length, 0);
-  fireEvent.change(view.getByLabelText("확인 문구"), {
-    target: { value: "응답 마감" },
-  });
+  assert.equal((confirm as HTMLButtonElement).disabled, false);
+  assert.equal(view.queryByLabelText("확인 문구"), null);
+  assert.equal(requests.length, 1);
   fireEvent.click(confirm);
   await view.findByText("연결을 확인해 주세요.");
-  assert.deepEqual(requests[0], { action: "close", confirmation: "응답 마감" });
+  assert.deepEqual(requests[1], { action: "close" });
   assert.ok(view.getByRole("dialog"));
   fireEvent.click(view.getByRole("button", { name: "마감 확정" }));
   await view.findByText("응답을 마감하고 최종 점수를 확정했습니다.");
@@ -253,7 +257,7 @@ test("a participant can recover a failed submission and complete all ten questio
     completedCount: 0,
     closedAt: null,
     privacyVersion: 2,
-    publicAdmin: false,
+    publicAdmin: true,
   };
   const participant: ParticipantSnapshot = {
     displayName: "테스트",
@@ -275,7 +279,7 @@ test("a participant can recover a failed submission and complete all ten questio
       if (url.includes("/api/participant")) {
         if (init?.method === "POST") {
           const body = JSON.parse(String(init.body));
-          assert.equal(body.publicAdminConsent, true);
+          assert.deepEqual(body, { nickname: "테스트" });
           registered = true;
         }
         return Response.json({ participant: registered ? participant : null });
@@ -314,27 +318,12 @@ test("a participant can recover a failed submission and complete all ten questio
   const { default: Participation } =
     await import("../app/components/participation.tsx");
   const view = render(<Participation />);
-  fireEvent.change(await view.findByLabelText("이름"), {
+  fireEvent.change(await view.findByLabelText("닉네임"), {
     target: { value: "테스트" },
   });
-  fireEvent.change(view.getByLabelText("학번"), {
-    target: { value: "20990001" },
-  });
-  fireEvent.click(view.getByRole("checkbox", { name: /개인정보 수집/ }));
-  event.publicAdmin = true;
-  fireEvent(dom.window.document, new dom.window.Event("visibilitychange"));
-  assert.ok(await view.findByRole("note", { name: "공개 운영실 안내" }));
-  assert.equal(
-    (view.getByRole("checkbox", { name: /개인정보 수집/ }) as HTMLInputElement).checked,
-    false,
-  );
-  fireEvent.change(view.getByLabelText("이름"), {
-    target: { value: "테스트" },
-  });
-  fireEvent.change(view.getByLabelText("학번"), {
-    target: { value: "20990001" },
-  });
-  fireEvent.click(view.getByRole("checkbox", { name: /개인정보 수집/ }));
+  assert.equal(view.getAllByRole("textbox").length, 1);
+  assert.equal(view.queryByLabelText("학번"), null);
+  assert.equal(view.queryByRole("checkbox"), null);
   fireEvent.click(view.getByRole("button", { name: /실험 시작하기/ }));
   const first = await view.findByRole("radio", { name: /바로 따라간다/ });
   assert.equal(view.queryByLabelText("선택 비율 결과"), null);

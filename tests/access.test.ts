@@ -38,7 +38,7 @@ const request = (
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
-test("explicit public admin access permits anonymous operations with disclosure and action confirmation", async (t) => {
+test("a public one-use event needs only nicknames and start, close and draw actions", async (t) => {
   t.after(async () => {
     await database.db.batch(
       [
@@ -62,29 +62,11 @@ test("explicit public admin access permits anonymous operations with disclosure 
     ((await snapshot.json()) as AdminSnapshot).event.publicAdmin,
     true,
   );
-  const configured = await publicApi.handle(
-    "admin",
-    request("/api/admin", {
-      action: "settings",
-      settings: {
-        organizer: "공개 검증",
-        privacyContact: "test@example.invalid",
-        retentionDays: 30,
-        instagramUrl: "",
-      },
-    }),
-  );
-  assert.equal(configured.status, 200);
-  const unconfirmed = await publicApi.handle(
-    "admin",
-    request("/api/admin", { action: "start" }),
-  );
-  assert.equal(unconfirmed.status, 400);
   const untrusted = await publicApi.handle(
     "admin",
     request(
       "/api/admin",
-      { action: "start", confirmation: "행사 시작" },
+      { action: "start" },
       { origin: "https://untrusted.example" },
     ),
   );
@@ -92,7 +74,7 @@ test("explicit public admin access permits anonymous operations with disclosure 
   assert.equal((await publicService.getPublicEvent()).status, "draft");
   const started = await publicApi.handle(
     "admin",
-    request("/api/admin", { action: "start", confirmation: "행사 시작" }),
+    request("/api/admin", { action: "start" }),
   );
   assert.equal(started.status, 200);
   const initial = await publicApi.handle(
@@ -100,30 +82,25 @@ test("explicit public admin access permits anonymous operations with disclosure 
     request("/api/participant"),
   );
   const cookie = initial.headers.get("set-cookie")!.split(";")[0];
-  const registration = {
-    name: "공개 동의 참가자",
-    studentId: "20997777",
-    consent: true,
-    privacyVersion: 2,
-  };
-  const outdated = await publicApi.handle(
-    "participant",
-    request("/api/participant", registration, { cookie }),
-  );
-  assert.equal(outdated.status, 400);
-  assert.equal((await publicService.getPublicEvent()).participantCount, 0);
   const registered = await publicApi.handle(
     "participant",
     request(
       "/api/participant",
-      { ...registration, publicAdminConsent: true },
+      { nickname: "생존자" },
       { cookie },
     ),
   );
   assert.equal(registered.status, 200);
+  const { participant } = (await registered.json()) as {
+    participant: ParticipantSnapshot;
+  };
+  assert.equal(participant.displayName, "생존자");
+  assert.match(participant.code, /^[A-F0-9]{8}$/);
   const csv = await publicApi.handle("export", request("/api/admin/export"));
   assert.equal(csv.status, 200);
-  assert.match(await csv.text(), /"공개 동의 참가자","20997777"/);
+  const exported = await csv.text();
+  assert.ok(exported.includes(`"${participant.code}","생존자"`));
+  assert.equal(exported.includes("학번"), false);
   await publicApi.handle("admin", request("/api/admin?action=close"));
   assert.equal((await publicService.getPublicEvent()).status, "open");
   for (let questionId = 1; questionId <= 10; questionId++) {
@@ -135,15 +112,20 @@ test("explicit public admin access permits anonymous operations with disclosure 
   }
   const closed = await publicApi.handle(
     "admin",
-    request("/api/admin", { action: "close", confirmation: "응답 마감" }),
+    request("/api/admin", { action: "close" }),
   );
   assert.equal(closed.status, 200);
   const draw = await publicApi.handle(
     "admin",
-    request("/api/admin", { action: "draw", confirmation: "당첨자 추첨" }),
+    request("/api/admin", { action: "draw" }),
   );
   assert.equal(draw.status, 200);
-  assert.equal(((await draw.json()) as AdminSnapshot).draw?.winners.length, 1);
+  const result = (await draw.json()) as AdminSnapshot;
+  assert.equal(result.draw?.winners.length, 1);
+  assert.equal(result.draw?.winners[0].name, "생존자");
+  assert.equal(result.draw?.winners[0].code, participant.code);
+  assert.equal(Object.hasOwn(result.draw!.winners[0], "studentId"), false);
+  assert.equal(Object.hasOwn(result.participants[0], "studentId"), false);
 });
 
 test("admin data and exports require a verified identity even when client headers claim one", async () => {
@@ -178,7 +160,7 @@ test("state-changing requests reject cross-origin and absent-origin requests", a
         "admin",
         request(
           "/api/admin",
-          { action: "start", confirmation: "행사 시작" },
+          { action: "start" },
           { origin: "https://attacker.example" },
         ),
       )
@@ -210,19 +192,13 @@ test("malformed and oversized JSON return bounded client errors", async () => {
     (
       await api().handle(
         "participant",
-        request("/api/participant", { name: "x".repeat(5000) }),
+        request("/api/participant", { nickname: "x".repeat(5000) }),
       )
     ).status,
     413,
   );
 });
 test("registration uses an HttpOnly session cookie and public responses omit other participants", async () => {
-  await service.updateSettings({
-    organizer: "검증 학과",
-    privacyContact: "test@example.invalid",
-    retentionDays: 30,
-    instagramUrl: "",
-  });
   await service.start();
   const initial = await api().handle(
     "participant",
@@ -237,12 +213,7 @@ test("registration uses an HttpOnly session cookie and public responses omit oth
     "participant",
     request(
       "/api/participant",
-      {
-        name: "보호된이름",
-        studentId: "20998888",
-        consent: true,
-        privacyVersion: 2,
-      },
+      { nickname: "보호된이름" },
       { cookie },
     ),
   );
@@ -253,7 +224,6 @@ test("registration uses an HttpOnly session cookie and public responses omit oth
   const publicResponse = await api().handle("event", request("/api/event"));
   const text = await publicResponse.text();
   assert.equal(text.includes("보호된이름"), false);
-  assert.equal(text.includes("20998888"), false);
   assert.equal(
     publicResponse.headers.get("cache-control"),
     "private, no-store",
@@ -293,12 +263,12 @@ test("registration uses an HttpOnly session cookie and public responses omit oth
     1,
   );
 });
-test("admin transitions require an explicit confirmation and cannot be triggered through GET", async () => {
+test("admin transitions reject unknown actions and cannot be triggered through GET", async () => {
   assert.equal(
     (
       await api(admin).handle(
         "admin",
-        request("/api/admin", { action: "close" }),
+        request("/api/admin", { action: "unknown" }),
       )
     ).status,
     400,
@@ -321,25 +291,12 @@ test("two independent HTTP sessions finish the event, receive final scores, and 
       "DELETE FROM rate_limits",
     ].map((sql) => database.db.prepare(sql)),
   );
-  const configured = await api(admin).handle(
-    "admin",
-    request("/api/admin", {
-      action: "settings",
-      settings: {
-        organizer: "검증 학과",
-        privacyContact: "test@example.invalid",
-        retentionDays: 30,
-        instagramUrl: "",
-      },
-    }),
-  );
-  assert.equal(configured.status, 200);
   const started = await api(admin).handle(
     "admin",
-    request("/api/admin", { action: "start", confirmation: "행사 시작" }),
+    request("/api/admin", { action: "start" }),
   );
   assert.equal(started.status, 200);
-  async function enter(studentId: string) {
+  async function enter(nickname: string) {
     const initial = await api().handle(
       "participant",
       request("/api/participant"),
@@ -349,19 +306,14 @@ test("two independent HTTP sessions finish the event, receive final scores, and 
       "participant",
       request(
         "/api/participant",
-        {
-          name: `검증 ${studentId}`,
-          studentId,
-          consent: true,
-          privacyVersion: 2,
-        },
+        { nickname },
         { cookie },
       ),
     );
     assert.equal(response.status, 200);
     return cookie;
   }
-  const cookies = await Promise.all([enter("20990001"), enter("20990002")]);
+  const cookies = await Promise.all([enter("검증 A"), enter("검증 B")]);
   for (let questionId = 1; questionId <= 10; questionId++) {
     const responses = await Promise.all(
       cookies.map((cookie, optionIndex) =>
@@ -384,7 +336,7 @@ test("two independent HTTP sessions finish the event, receive final scores, and 
   );
   const closed = await api(admin).handle(
     "admin",
-    request("/api/admin", { action: "close", confirmation: "응답 마감" }),
+    request("/api/admin", { action: "close" }),
   );
   assert.equal(closed.status, 200);
   for (const cookie of cookies) {
@@ -403,7 +355,7 @@ test("two independent HTTP sessions finish the event, receive final scores, and 
     [1, 2].map(() =>
       api(admin).handle(
         "admin",
-        request("/api/admin", { action: "draw", confirmation: "당첨자 추첨" }),
+        request("/api/admin", { action: "draw" }),
       ),
     ),
   );
@@ -429,12 +381,6 @@ test("GitHub Pages uses an explicit CORS origin and bearer sessions without thir
       "DELETE FROM rate_limits",
     ].map((sql) => database.db.prepare(sql)),
   );
-  await service.updateSettings({
-    organizer: "검증 학과",
-    privacyContact: "test@example.invalid",
-    retentionDays: 30,
-    instagramUrl: "",
-  });
   await service.start();
   const pagesOrigin = "https://dhoklim.github.io";
   const pagesApi = new EventApi(service, {
@@ -473,12 +419,7 @@ test("GitHub Pages uses an explicit CORS origin and bearer sessions without thir
     "participant",
     request(
       "/api/participant",
-      {
-        name: "페이지 참가자",
-        studentId: "20997777",
-        consent: true,
-        privacyVersion: 2,
-      },
+      { nickname: "페이지 참가자" },
       authHeaders,
     ),
   );
@@ -524,7 +465,7 @@ test("GitHub Pages uses an explicit CORS origin and bearer sessions without thir
     "admin",
     request(
       "/api/admin",
-      { action: "close", confirmation: "응답 마감" },
+      { action: "close" },
       authHeaders,
     ),
   );

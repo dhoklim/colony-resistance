@@ -34,7 +34,6 @@ export const events = sqliteTable(
 export const participants = sqliteTable("participants", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
-  studentId: text("student_id").notNull().unique(),
   tokenHash: text("token_hash").notNull().unique(),
   expiresAt: integer("expires_at").notNull(),
   consentVersion: integer("consent_version").notNull(),

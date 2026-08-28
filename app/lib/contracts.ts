@@ -35,14 +35,14 @@ export type ParticipantSnapshot = {
 export type LeaderboardEntry = {
   id: string;
   name: string;
-  studentId: string;
+  code: string;
   completed: boolean;
   answeredCount: number;
   score: number;
   registeredAt: string;
 };
 export type DrawResult = {
-  winners: { id: string; name: string; studentId: string; score: number }[];
+  winners: { id: string; name: string; code: string; score: number }[];
   eligibleCount: number;
   drawnAt: string;
 };

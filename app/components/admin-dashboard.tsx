@@ -12,14 +12,13 @@ import {
   Ticket,
   Users,
 } from "lucide-react";
-import type { AdminSnapshot, EventStatus, Settings } from "../lib/contracts";
+import type { AdminSnapshot, EventStatus } from "../lib/contracts";
 import { apiJson, friendlyError } from "../lib/client";
 import { optionMarkers, questions } from "../lib/questions";
 import AdminConfirmation, {
   actionCopy,
   type AdminAction,
 } from "./admin-confirmation";
-import EventSettings from "./event-settings";
 import EventQr from "./event-qr";
 
 const statusCopy: Record<EventStatus, string> = {
@@ -107,11 +106,7 @@ export default function AdminDashboard({
     };
   }, [refresh]);
 
-  async function mutate(
-    body:
-      | { action: "settings"; settings: Settings }
-      | { action: AdminAction; confirmation: string },
-  ) {
+  async function mutate(body: { action: AdminAction }) {
     if (busy.current) return;
     busy.current = true;
     generation.current += 1;
@@ -120,11 +115,7 @@ export default function AdminDashboard({
     setMessage("");
     try {
       accept(await apiJson<AdminSnapshot>("/api/admin", body));
-      setMessage(
-        body.action === "settings"
-          ? "운영 안내를 저장했습니다."
-          : actionCopy[body.action].success,
-      );
+      setMessage(actionCopy[body.action].success);
       setAction(null);
     } catch (caught) {
       setError(friendlyError(caught));
@@ -178,17 +169,6 @@ export default function AdminDashboard({
               {statusCopy[event.status]}
             </span>
           </div>
-          {event.publicAdmin && (
-            <div
-              className="alert alert-warning"
-              role="note"
-              aria-label="공개 운영실 안내"
-            >
-              누구나 이름·학번·참여 현황·점수·당첨 결과를 조회·다운로드하고
-              행사 시작·마감·추첨을 실행할 수 있습니다. 확인 절차는 실수
-              방지용이며 접근 권한을 제한하지 않습니다.
-            </div>
-          )}
           {message && (
             <div className="alert alert-success" role="status">
               {message}
@@ -240,7 +220,7 @@ export default function AdminDashboard({
                 {isFinal
                   ? "최종 점수가 확정되었습니다."
                   : event.status === "draft"
-                    ? "운영 안내를 저장한 뒤 시작해 주세요."
+                    ? "준비가 됐다면 바로 시작해 주세요."
                     : "각 참가자의 선택을 실시간으로 집계합니다."}
               </strong>
               <p>
@@ -252,13 +232,8 @@ export default function AdminDashboard({
             {event.status === "draft" && (
               <button
                 className="button button-primary"
-                disabled={
-                  pending ||
-                  !event.settings.organizer ||
-                  !event.settings.privacyContact ||
-                  !event.settings.retentionDays
-                }
-                onClick={() => choose("start")}
+                disabled={pending}
+                onClick={() => void mutate({ action: "start" })}
               >
                 이벤트 시작하기 <ArrowRight size={16} aria-hidden="true" />
               </button>
@@ -311,10 +286,7 @@ export default function AdminDashboard({
                     <span className="winner-number">0{index + 1}</span>
                     <div>
                       <h3>{winner.name}</h3>
-                      <p>
-                        학번 {winner.studentId} · 참가코드{" "}
-                        {winner.id.slice(0, 8).toUpperCase()}
-                      </p>
+                      <p>참가 코드 {winner.code}</p>
                     </div>
                     <strong>
                       {winner.score}
@@ -324,8 +296,8 @@ export default function AdminDashboard({
                 ))}
               </div>
               <p className="small-note">
-                저장된 결과는 새로고침해도 바뀌지 않습니다. 학과 공식
-                인스타그램에는 본인 확인에 필요한 최소 정보만 발표해 주세요.
+                닉네임과 참가 코드로 당첨자를 확인하세요. 새로고침해도 추첨
+                결과는 유지됩니다.
               </p>
             </section>
           )}
@@ -349,8 +321,8 @@ export default function AdminDashboard({
                     </caption>
                     <thead>
                       <tr>
-                        <th scope="col">참가자</th>
-                        <th scope="col">학번</th>
+                        <th scope="col">닉네임</th>
+                        <th scope="col">참가 코드</th>
                         <th scope="col">진행</th>
                         <th scope="col">
                           {isFinal ? "최종 점수" : "잠정 점수"}
@@ -362,11 +334,8 @@ export default function AdminDashboard({
                         <tr key={person.id}>
                           <td>
                             <strong>{person.name}</strong>
-                            <span className="table-code">
-                              {person.id.slice(0, 8).toUpperCase()}
-                            </span>
                           </td>
-                          <td className="mono">{person.studentId}</td>
+                          <td className="mono">{person.code}</td>
                           <td>
                             <span
                               className={`badge ${person.completed ? "badge-green" : ""}`}
@@ -416,8 +385,7 @@ export default function AdminDashboard({
                   </div>
                 </div>
                 <p className="small-note">
-                  이름과 학번이 포함된 화면·CSV는 공개하지 마세요. 학번 중복은
-                  제한하지만 실제 학생 신원 인증을 대신하지는 않습니다.
+                  같은 닉네임은 참가 코드로 구분할 수 있습니다.
                 </p>
               </section>
               <section
@@ -486,14 +454,6 @@ export default function AdminDashboard({
             </div>
             <aside className="admin-aside">
               <EventQr participationUrl={participationUrl} />
-              <EventSettings
-                key={event.privacyVersion}
-                event={event}
-                pending={pending}
-                onSave={(settings) =>
-                  void mutate({ action: "settings", settings })
-                }
-              />
               <section className="admin-rules">
                 <p className="eyebrow">DRAW RULES</p>
                 <h2>선정 기준</h2>
@@ -535,7 +495,7 @@ export default function AdminDashboard({
               setError("");
             }
           }}
-          onConfirm={(confirmation) => void mutate({ action, confirmation })}
+          onConfirm={() => void mutate({ action })}
         />
       )}
     </div>

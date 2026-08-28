@@ -57,6 +57,9 @@ export function Completion({
         <span>나의 참가 코드</span>
         <strong>{participant.code}</strong>
       </div>
+      <p className="small-note">
+        당첨자 확인을 위해 닉네임과 참가 코드를 캡처해 두세요.
+      </p>
       <div className="reward-note">
         <Ticket size={22} strokeWidth={1.3} aria-hidden="true" />
         <div>

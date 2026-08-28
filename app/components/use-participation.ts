@@ -160,7 +160,7 @@ export function useParticipation() {
     participant?.final,
   ]);
 
-  async function register(name: string, studentId: string, consent: boolean) {
+  async function register(nickname: string) {
     if (busy.current || !event) return;
     busy.current = true;
     setPending(true);
@@ -168,13 +168,7 @@ export function useParticipation() {
     try {
       const data = await apiJson<{ participant: ParticipantSnapshot }>(
         "/api/participant",
-        {
-          name,
-          studentId,
-          consent,
-          privacyVersion: event.privacyVersion,
-          publicAdminConsent: event.publicAdmin && consent,
-        },
+        { nickname },
       );
       setParticipant(data.participant);
       setQuestionId(1);
