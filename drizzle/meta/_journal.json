@@ -15,6 +15,13 @@
       "when": 1787898059397,
       "tag": "0001_light_miss_america",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1787899500240,
+      "tag": "0002_tough_mother_askani",
+      "breakpoints": true
     }
   ]
 }

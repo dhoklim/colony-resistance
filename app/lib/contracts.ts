@@ -7,6 +7,7 @@ export type Settings = {
 };
 export type PublicEvent = {
   status: EventStatus;
+  round: number;
   settings: Settings;
   participantCount: number;
   completedCount: number;

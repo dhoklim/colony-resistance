@@ -126,6 +126,81 @@ test("a public one-use event needs only nicknames and start, close and draw acti
   assert.equal(result.draw?.winners[0].code, participant.code);
   assert.equal(Object.hasOwn(result.draw!.winners[0], "studentId"), false);
   assert.equal(Object.hasOwn(result.participants[0], "studentId"), false);
+  await publicApi.handle("admin", request("/api/admin?action=reset"));
+  assert.equal((await publicService.getPublicEvent()).status, "drawn");
+  const invalidReset = await publicApi.handle(
+    "admin",
+    request("/api/admin", { action: "reset" }),
+  );
+  assert.equal(invalidReset.status, 400);
+  const reset = await publicApi.handle(
+    "admin",
+    request("/api/admin", { action: "reset", round: 1 }),
+  );
+  assert.equal(reset.status, 200);
+  const nextRound = (await reset.json()) as AdminSnapshot;
+  assert.equal(nextRound.event.status, "open");
+  assert.equal(nextRound.event.round, 2);
+  assert.equal(nextRound.event.participantCount, 0);
+  assert.equal(nextRound.draw, null);
+  const oldSession = await publicApi.handle(
+    "participant",
+    request("/api/participant", undefined, { cookie }),
+  );
+  assert.deepEqual(await oldSession.json(), { participant: null });
+  for (const round of [1, undefined]) {
+    const staleRegistration = await publicApi.handle(
+      "participant",
+      request("/api/participant", { nickname: "이전 화면", round }, { cookie }),
+    );
+    assert.equal(staleRegistration.status, 409);
+  }
+  assert.equal((await publicService.getPublicEvent()).participantCount, 0);
+  const rejoined = await publicApi.handle(
+    "participant",
+    request("/api/participant", { nickname: "다시 생존자", round: 2 }, { cookie }),
+  );
+  assert.equal(rejoined.status, 200);
+  assert.notEqual(
+    ((await rejoined.json()) as { participant: ParticipantSnapshot }).participant.code,
+    participant.code,
+  );
+  for (const round of [1, undefined]) {
+    const staleAnswer = await publicApi.handle(
+      "answer",
+      request("/api/answer", { questionId: 1, optionIndex: 0, round }, { cookie }),
+    );
+    assert.equal(staleAnswer.status, 409);
+  }
+  const untouched = await publicApi.handle(
+    "participant",
+    request("/api/participant", undefined, { cookie }),
+  );
+  assert.deepEqual(
+    ((await untouched.json()) as { participant: ParticipantSnapshot }).participant.answers,
+    [],
+  );
+  const newAnswer = await publicApi.handle(
+    "answer",
+    request("/api/answer", { questionId: 1, optionIndex: 1, round: 2 }, { cookie }),
+  );
+  assert.equal(newAnswer.status, 200);
+  assert.deepEqual(
+    ((await newAnswer.json()) as { distribution: Distribution }).distribution.counts,
+    [0, 1, 0, 0],
+  );
+  const staleClose = await publicApi.handle(
+    "admin",
+    request("/api/admin", { action: "close", round: 1 }),
+  );
+  assert.equal(staleClose.status, 409);
+  assert.equal((await publicService.getPublicEvent()).status, "open");
+  const newClose = await publicApi.handle(
+    "admin",
+    request("/api/admin", { action: "close", round: 2 }),
+  );
+  assert.equal(newClose.status, 200);
+  assert.equal((await publicService.getPublicEvent()).status, "closed");
 });
 
 test("admin data and exports require a verified identity even when client headers claim one", async () => {

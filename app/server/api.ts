@@ -18,6 +18,14 @@ import {
 
 export type ApiRoute = "event" | "participant" | "answer" | "admin" | "export";
 
+function requestRound(body: Record<string, unknown>): number {
+  // Cached clients without a round belong to the original event only.
+  const round = body.round === undefined ? 1 : body.round;
+  if (typeof round !== "number" || !Number.isSafeInteger(round) || round < 1)
+    throw new AppError(400, "행사 정보를 확인해 주세요.");
+  return round;
+}
+
 export class EventApi {
   constructor(
     readonly service: EventService,
@@ -111,10 +119,15 @@ export class EventApi {
         60000,
       );
       const body = await readJson(request);
-      if (body.action === "start") await this.service.start();
-      else if (body.action === "close") await this.service.close();
-      else if (body.action === "draw") await this.service.draw();
-      else throw new AppError(400, "진행할 작업을 확인해 주세요.");
+      const round = requestRound(body);
+      if (body.action === "start") await this.service.start(round);
+      else if (body.action === "close") await this.service.close(round);
+      else if (body.action === "draw") await this.service.draw(round);
+      else if (body.action === "reset") {
+        if (typeof body.round !== "number")
+          throw new AppError(400, "행사 정보를 확인해 주세요.");
+        await this.service.reset(body.round);
+      } else throw new AppError(400, "진행할 작업을 확인해 주세요.");
       return json(await this.service.getAdminSnapshot());
     } catch (error) {
       return errorResponse(error);
@@ -150,7 +163,7 @@ export class EventApi {
         120,
         60000,
       );
-    const row = await this.service.register(body, tokenHash);
+    const row = await this.service.register(body, tokenHash, requestRound(body));
     return json({ participant: await this.service.getParticipant(row.id) });
   }
 
@@ -186,6 +199,7 @@ export class EventApi {
       participant.id,
       body.questionId,
       body.optionIndex,
+      requestRound(body),
     );
     return json({
       distribution,

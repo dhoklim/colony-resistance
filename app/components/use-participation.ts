@@ -34,10 +34,30 @@ export function useParticipation() {
         ),
       ]);
       if (signal?.aborted) return;
+      const last =
+        me.participant &&
+        !me.participant.completed &&
+        eventData.event.status !== "closed" &&
+        eventData.event.status !== "drawn"
+          ? me.participant.answers.at(-1)
+          : undefined;
+      const result = last
+        ? await apiJson<{ distribution: Distribution }>(
+            `/api/answer?questionId=${last.questionId}`,
+            undefined,
+            signal,
+          )
+        : null;
+      if (signal?.aborted) return;
+      // Finish the reads before changing round, which restarts the polling effect.
       setError("");
+      setSyncError("");
       setEvent(eventData.event);
       setParticipant(me.participant);
       if (!me.participant) {
+        setQuestionId(1);
+        setSelection(null);
+        setDistribution(null);
         setPhase("registration");
         return;
       }
@@ -52,14 +72,7 @@ export function useParticipation() {
         setPhase("closed");
         return;
       }
-      const last = me.participant.answers.at(-1);
-      if (last) {
-        const result = await apiJson<{ distribution: Distribution }>(
-          `/api/answer?questionId=${last.questionId}`,
-          undefined,
-          signal,
-        );
-        if (signal?.aborted) return;
+      if (last && result) {
         setQuestionId(last.questionId);
         setSelection(last.optionIndex);
         setDistribution(result.distribution);
@@ -84,52 +97,47 @@ export function useParticipation() {
   }, [load]);
 
   useEffect(() => {
-    if (!["registration", "result", "complete"].includes(phase)) return;
-    if (
-      phase === "registration" &&
-      event?.status !== "draft" &&
-      event?.status !== "open"
-    )
-      return;
-    if (
-      (phase === "result" && distribution?.final) ||
-      (phase === "complete" && participant?.final)
-    )
-      return;
+    if (phase === "loading") return;
     const controller = new AbortController();
     let active = false;
     const refresh = async () => {
-      if (document.hidden || active) return;
+      if (document.hidden || active || busy.current) return;
       active = true;
       try {
-        if (phase === "registration") {
-          const data = await apiJson<{ event: PublicEvent }>(
-            "/api/event",
+        const [eventData, me] = await Promise.all([
+          apiJson<{ event: PublicEvent }>("/api/event", undefined, controller.signal),
+          phase === "registration"
+            ? Promise.resolve(null)
+            : apiJson<{ participant: ParticipantSnapshot | null }>(
+                "/api/participant",
+                undefined,
+                controller.signal,
+              ),
+        ]);
+        if (controller.signal.aborted) return;
+        if (eventData.event.round !== event?.round || (me && !me.participant)) {
+          await load(controller.signal);
+          return;
+        }
+        setEvent(eventData.event);
+        if (
+          phase === "question" &&
+          (eventData.event.status === "closed" || eventData.event.status === "drawn")
+        ) {
+          await load(controller.signal);
+          return;
+        }
+        if (me?.participant) setParticipant(me.participant);
+        if (phase === "result") {
+          const result = await apiJson<{ distribution: Distribution }>(
+            `/api/answer?questionId=${questionId}`,
             undefined,
             controller.signal,
           );
-          if (!controller.signal.aborted) setEvent(data.event);
-        } else {
-          const [me, result] = await Promise.all([
-            apiJson<{ participant: ParticipantSnapshot | null }>(
-              "/api/participant",
-              undefined,
-              controller.signal,
-            ),
-            phase === "result"
-              ? apiJson<{ distribution: Distribution }>(
-                  `/api/answer?questionId=${questionId}`,
-                  undefined,
-                  controller.signal,
-                )
-              : Promise.resolve(null),
-          ]);
-          if (!controller.signal.aborted) {
-            if (me.participant) setParticipant(me.participant);
-            if (result) setDistribution(result.distribution);
-          }
+          if (controller.signal.aborted) return;
+          setDistribution(result.distribution);
         }
-        if (!controller.signal.aborted) setSyncError("");
+        setSyncError("");
       } catch {
         if (!controller.signal.aborted)
           setSyncError(
@@ -152,13 +160,7 @@ export function useParticipation() {
       controller.abort();
       document.removeEventListener("visibilitychange", visible);
     };
-  }, [
-    phase,
-    questionId,
-    event?.status,
-    distribution?.final,
-    participant?.final,
-  ]);
+  }, [phase, questionId, event?.round, load]);
 
   async function register(nickname: string) {
     if (busy.current || !event) return;
@@ -168,7 +170,7 @@ export function useParticipation() {
     try {
       const data = await apiJson<{ participant: ParticipantSnapshot }>(
         "/api/participant",
-        { nickname },
+        { nickname, round: event.round },
       );
       setParticipant(data.participant);
       setQuestionId(1);
@@ -184,7 +186,7 @@ export function useParticipation() {
   }
 
   async function submit() {
-    if (busy.current || phase !== "question" || selection === null) return;
+    if (busy.current || !event || phase !== "question" || selection === null) return;
     busy.current = true;
     setPending(true);
     setError("");
@@ -192,7 +194,7 @@ export function useParticipation() {
       const data = await apiJson<{
         participant: ParticipantSnapshot;
         distribution: Distribution;
-      }>("/api/answer", { questionId, optionIndex: selection });
+      }>("/api/answer", { questionId, optionIndex: selection, round: event.round });
       setParticipant(data.participant);
       setDistribution(data.distribution);
       setSelection(data.distribution.selectedIndex);

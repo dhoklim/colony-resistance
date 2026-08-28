@@ -13,6 +13,7 @@ export const events = sqliteTable(
   {
     id: integer("id").primaryKey(),
     status: text("status").notNull().default("draft"),
+    round: integer("round").notNull().default(1),
     settings: text("settings")
       .notNull()
       .default(

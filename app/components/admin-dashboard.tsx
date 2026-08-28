@@ -8,6 +8,7 @@ import {
   Download,
   LockKeyhole,
   RefreshCw,
+  RotateCcw,
   ShieldCheck,
   Ticket,
   Users,
@@ -40,7 +41,7 @@ export default function AdminDashboard({
   const [data, setData] = useState(initial);
   const [pending, setPending] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [action, setAction] = useState<AdminAction | null>(null);
+  const [action, setAction] = useState<{ name: AdminAction; round: number } | null>(null);
   const [error, setError] = useState("");
   const [syncError, setSyncError] = useState("");
   const [message, setMessage] = useState("");
@@ -106,7 +107,7 @@ export default function AdminDashboard({
     };
   }, [refresh]);
 
-  async function mutate(body: { action: AdminAction }) {
+  async function mutate(body: { action: AdminAction; round: number }) {
     if (busy.current) return;
     busy.current = true;
     generation.current += 1;
@@ -127,7 +128,7 @@ export default function AdminDashboard({
   function choose(next: AdminAction) {
     setError("");
     setMessage("");
-    setAction(next);
+    setAction({ name: next, round: event.round });
   }
 
   return (
@@ -151,18 +152,14 @@ export default function AdminDashboard({
                 ) : (
                   <ShieldCheck size={14} aria-hidden="true" />
                 )}
-                {event.publicAdmin
-                  ? "PUBLIC EVENT CONTROL"
-                  : "AUTHORIZED PERSONNEL ONLY"}
+                EVENT CONTROL
               </p>
               <h1>
                 이벤트 운영실<span className="title-dot">.</span>
               </h1>
-              <p className="admin-account">
-                {event.publicAdmin
-                  ? "로그인 없이 누구나 이용할 수 있습니다."
-                  : email}
-              </p>
+              {!event.publicAdmin && email && (
+                <p className="admin-account">{email}</p>
+              )}
             </div>
             <span className={`badge status-badge status-${event.status}`}>
               <span className="status-dot" />
@@ -233,7 +230,7 @@ export default function AdminDashboard({
               <button
                 className="button button-primary"
                 disabled={pending}
-                onClick={() => void mutate({ action: "start" })}
+                onClick={() => void mutate({ action: "start", round: event.round })}
               >
                 이벤트 시작하기 <ArrowRight size={16} aria-hidden="true" />
               </button>
@@ -261,6 +258,13 @@ export default function AdminDashboard({
                 <ShieldCheck size={19} aria-hidden="true" /> 추첨 결과 저장됨
               </span>
             )}
+            <button
+              className="button button-secondary"
+              disabled={pending}
+              onClick={() => choose("reset")}
+            >
+              행사 다시하기 <RotateCcw size={16} aria-hidden="true" />
+            </button>
           </section>
           {event.status === "closed" && event.completedCount === 0 && (
             <p className="small-note">
@@ -470,8 +474,7 @@ export default function AdminDashboard({
           </div>
           <footer className="admin-footer">
             <span>
-              {updated ? `최근 갱신 ${updated} KST` : "5초마다 자동 갱신"} ·
-              {event.publicAdmin ? "전체 공개" : "운영자에게만 표시"}
+              {updated ? `최근 갱신 ${updated} KST` : "5초마다 자동 갱신"}
             </span>
             <button
               className="small-link"
@@ -486,7 +489,7 @@ export default function AdminDashboard({
       </div>
       {action && (
         <AdminConfirmation
-          action={action}
+          action={action.name}
           pending={pending}
           error={error}
           onCancel={() => {
@@ -495,7 +498,7 @@ export default function AdminDashboard({
               setError("");
             }
           }}
-          onConfirm={() => void mutate({ action })}
+          onConfirm={() => void mutate({ action: action.name, round: action.round })}
         />
       )}
     </div>

@@ -1,0 +1,1 @@
+ALTER TABLE `events` ADD `round` integer DEFAULT 1 NOT NULL;

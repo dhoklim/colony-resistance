@@ -2,7 +2,7 @@
 import { useEffect, useRef } from "react";
 import { CircleHelp } from "lucide-react";
 
-export type AdminAction = "start" | "close" | "draw";
+export type AdminAction = "start" | "close" | "draw" | "reset";
 export const actionCopy = {
   start: {
     title: "이벤트를 시작할까요?",
@@ -14,7 +14,7 @@ export const actionCopy = {
     title: "응답을 마감할까요?",
     button: "마감 확정",
     description:
-      "응답 접수를 끝내고 최종 점수를 확정합니다. 마감 후에는 다시 열 수 없습니다.",
+      "응답 접수를 끝내고 최종 점수를 확정합니다. 마감 후에는 답변을 추가할 수 없습니다.",
     success: "응답을 마감하고 최종 점수를 확정했습니다.",
   },
   draw: {
@@ -23,6 +23,13 @@ export const actionCopy = {
     description:
       "10문항 완료자 중 점수순으로 최대 2명을 선정하고, 동점자는 추첨합니다. 결과는 한 번만 확정됩니다.",
     success: "당첨자를 선정하고 결과를 저장했습니다.",
+  },
+  reset: {
+    title: "행사를 처음부터 다시 시작할까요?",
+    button: "지우고 다시 시작",
+    description:
+      "참가 명단·답변·점수·추첨 결과를 모두 지우고 새로 시작합니다. 지운 기록은 되돌릴 수 없습니다.",
+    success: "기록을 초기화하고 행사를 다시 시작했습니다.",
   },
 } as const;
 
@@ -118,7 +125,7 @@ export default function AdminConfirmation({
             </button>
             <button
               type="submit"
-              className={`button ${action === "close" ? "button-danger" : "button-primary"}`}
+              className={`button ${action === "close" || action === "reset" ? "button-danger" : "button-primary"}`}
               disabled={pending}
             >
               {pending ? "처리 중…" : copy.button}

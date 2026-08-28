@@ -228,6 +228,59 @@ test("empty draws fail without changing status", async () => {
   assert.equal((await service.getParticipant(a.id)).completed, false);
 });
 
+test("reset clears a finished event and lets the same browser participate in a fresh round", async () => {
+  await openEvent();
+  assert.equal((await service.getPublicEvent()).round, 1);
+  const previous = await register(1);
+  for (let questionId = 1; questionId <= 10; questionId++)
+    await service.submitAnswer(previous.id, questionId, 0);
+  await service.close();
+  await service.draw();
+  await service.reset(1);
+  const restarted = await service.getAdminSnapshot();
+  assert.equal(restarted.event.status, "open");
+  assert.equal(restarted.event.round, 2);
+  assert.equal(restarted.event.closedAt, null);
+  assert.equal(restarted.event.participantCount, 0);
+  assert.equal(restarted.event.completedCount, 0);
+  assert.equal(restarted.draw, null);
+  assert.deepEqual(restarted.participants, []);
+  assert.ok(restarted.distributions.every((question) => question.total === 0));
+  assert.equal(await service.getParticipantByToken("1".padStart(64, "0")), null);
+  const next = await register(1);
+  assert.notEqual(next.id, previous.id);
+  const answer = await service.submitAnswer(next.id, 1, 2);
+  assert.deepEqual(answer.counts, [0, 0, 1, 0]);
+  assert.equal(answer.final, false);
+  for (let questionId = 2; questionId <= 10; questionId++)
+    await service.submitAnswer(next.id, questionId, 2);
+  await service.close(2);
+  const secondDraw = await service.draw(2);
+  assert.deepEqual(secondDraw.winners.map((winner) => winner.id), [next.id]);
+});
+
+test("duplicate resets and stale controls cannot clear or close the new round", async () => {
+  await openEvent();
+  assert.equal((await service.getPublicEvent()).round, 1);
+  const previous = await register(1);
+  await service.submitAnswer(previous.id, 1, 0);
+  await Promise.allSettled([service.close(1), service.reset(1)]);
+  assert.equal((await service.getPublicEvent()).status, "open");
+  const next = await register(1);
+  await service.submitAnswer(next.id, 1, 2);
+  await Promise.all([service.reset(1), service.reset(1)]);
+  assert.equal((await service.getPublicEvent()).round, 2);
+  assert.equal((await service.getPublicEvent()).participantCount, 1);
+  assert.deepEqual((await service.getDistribution(next.id, 1)).counts, [0, 0, 1, 0]);
+  await assert.rejects(() => service.close(1), { status: 409 });
+  await assert.rejects(() => service.draw(1), { status: 409 });
+  await assert.rejects(() => service.reset(0), { status: 400 });
+  await assert.rejects(() => service.reset(3), { status: 409 });
+  await Promise.all([service.reset(2), service.reset(2)]);
+  assert.equal((await service.getPublicEvent()).round, 3);
+  assert.equal((await service.getPublicEvent()).participantCount, 0);
+});
+
 test("rate limits reject excess requests and release them after the window", async () => {
   await service.consumeRateLimit("test", 2, 1000, 100);
   await service.consumeRateLimit("test", 2, 1000, 101);

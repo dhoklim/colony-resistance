@@ -14,6 +14,7 @@ import { AppError, isRecord } from "./errors";
 
 type EventRow = {
   status: EventStatus;
+  round: number;
   settings: string;
   privacy_version: number;
   final_counts: string | null;
@@ -30,6 +31,14 @@ type CountRow = { questionId: number; optionIndex: number; count: number };
 type AnswerRow = { questionId: number; optionIndex: number };
 type EntryRow = ParticipantRow & { answerData: string };
 const SESSION_LIFETIME = 30 * 24 * 60 * 60 * 1000;
+
+function assertCurrentRound(event: EventRow, expected?: number) {
+  if (expected === undefined) return;
+  if (!Number.isSafeInteger(expected) || expected < 1)
+    throw new AppError(400, "행사 정보를 확인해 주세요.");
+  if (event.round !== expected)
+    throw new AppError(409, "행사가 다시 시작되었습니다. 화면을 새로고침해 주세요.");
+}
 
 function makeCounts(rows: CountRow[]): number[][] {
   const counts = questions.map(() => [0, 0, 0, 0]);
@@ -80,6 +89,7 @@ export class EventService {
       .first<{ participants: number; completed: number }>();
     return {
       status: event.status,
+      round: event.round,
       settings: JSON.parse(event.settings) as Settings,
       participantCount: counts?.participants ?? 0,
       completedCount: counts?.completed ?? 0,
@@ -89,20 +99,50 @@ export class EventService {
     };
   }
 
-  async start(): Promise<PublicEvent> {
+  async start(expectedRound?: number): Promise<PublicEvent> {
     const event = await this.event();
+    assertCurrentRound(event, expectedRound);
     if (event.status === "open") return this.getPublicEvent();
     if (event.status !== "draft")
       throw new AppError(409, "마감된 행사는 다시 시작할 수 없습니다.");
     await this.db
       .prepare(
-        "UPDATE events SET status = 'open' WHERE id = 1 AND status = 'draft'",
+        "UPDATE events SET status = 'open' WHERE id = 1 AND status = 'draft' AND round = ?",
       )
+      .bind(event.round)
       .run();
     return this.getPublicEvent();
   }
 
-  async register(input: unknown, tokenHash: string): Promise<ParticipantRow> {
+  async reset(expectedRound: number): Promise<PublicEvent> {
+    if (!Number.isSafeInteger(expectedRound) || expectedRound < 1)
+      throw new AppError(400, "행사 정보를 확인해 주세요.");
+    const event = await this.event();
+    if (expectedRound < event.round) return this.getPublicEvent();
+    assertCurrentRound(event, expectedRound);
+    // Guard every statement so a retry cannot delete a newer round's records.
+    await this.db.batch([
+      this.db
+        .prepare("DELETE FROM draws WHERE event_id = 1 AND EXISTS (SELECT 1 FROM events WHERE id = 1 AND round = ?)")
+        .bind(expectedRound),
+      this.db
+        .prepare("DELETE FROM answers WHERE EXISTS (SELECT 1 FROM events WHERE id = 1 AND round = ?)")
+        .bind(expectedRound),
+      this.db
+        .prepare("DELETE FROM participants WHERE EXISTS (SELECT 1 FROM events WHERE id = 1 AND round = ?)")
+        .bind(expectedRound),
+      this.db
+        .prepare("UPDATE events SET status = 'open', round = round + 1, final_counts = NULL, closed_at = NULL WHERE id = 1 AND round = ?")
+        .bind(expectedRound),
+    ]);
+    return this.getPublicEvent();
+  }
+
+  async register(
+    input: unknown,
+    tokenHash: string,
+    expectedRound?: number,
+  ): Promise<ParticipantRow> {
     if (!isRecord(input) || typeof input.nickname !== "string") {
       throw new AppError(400, "닉네임을 입력해 주세요.");
     }
@@ -116,6 +156,7 @@ export class EventService {
       throw new AppError(400, "닉네임은 40자 이내로 입력해 주세요.");
     }
     const event = await this.event();
+    assertCurrentRound(event, expectedRound);
     const existing = await this.getParticipantByToken(tokenHash);
     if (existing) {
       if (existing.name !== name)
@@ -132,7 +173,7 @@ export class EventService {
     await this.db
       .prepare(
         `INSERT INTO participants (id,name,token_hash,expires_at,consent_version,created_at)
-      SELECT ?,?,?,?,?,? FROM events WHERE id = 1 AND status = 'open'
+      SELECT ?,?,?,?,?,? FROM events WHERE id = 1 AND status = 'open' AND round = ?
       ON CONFLICT DO NOTHING`,
       )
       .bind(
@@ -142,6 +183,7 @@ export class EventService {
         Date.now() + SESSION_LIFETIME,
         0, // Nickname-only registration did not use the legacy consent form.
         new Date().toISOString(),
+        event.round,
       )
       .run();
     const participant = await this.getParticipantByToken(tokenHash);
@@ -210,6 +252,7 @@ export class EventService {
     id: string,
     questionId: number,
     optionIndex: number,
+    expectedRound?: number,
   ): Promise<Distribution> {
     if (
       !Number.isInteger(questionId) ||
@@ -221,18 +264,20 @@ export class EventService {
     )
       throw new AppError(400, "유효한 문항과 선택지를 선택해 주세요.");
     await this.participant(id);
-    await this.event();
+    const event = await this.event();
+    assertCurrentRound(event, expectedRound);
     const now = new Date().toISOString();
     // The status and sequence checks live inside the write, so close/submit races cannot admit a late vote.
     await this.db.batch([
       this.db
         .prepare(
           `INSERT INTO answers (participant_id,question_id,option_index,created_at)
-        SELECT ?,?,?,? FROM events WHERE id = 1 AND status = 'open'
+        SELECT ?,?,?,? FROM events WHERE id = 1 AND status = 'open' AND round = ?
+        AND EXISTS (SELECT 1 FROM participants WHERE id = ?)
         AND (SELECT COUNT(*) FROM answers WHERE participant_id = ?) = ?
         ON CONFLICT (participant_id,question_id) DO NOTHING`,
         )
-        .bind(id, questionId, optionIndex, now, id, questionId - 1),
+        .bind(id, questionId, optionIndex, now, event.round, id, id, questionId - 1),
       this.db
         .prepare(
           `UPDATE participants SET completed_at = ? WHERE id = ? AND completed_at IS NULL
@@ -289,8 +334,9 @@ export class EventService {
     };
   }
 
-  async close(): Promise<PublicEvent> {
+  async close(expectedRound?: number): Promise<PublicEvent> {
     const event = await this.event();
+    assertCurrentRound(event, expectedRound);
     if (event.status === "draft")
       throw new AppError(409, "시작하지 않은 행사를 마감할 수 없습니다.");
     // One SQLite statement freezes the exact same vote set that it closes.
@@ -299,9 +345,9 @@ export class EventService {
         `UPDATE events SET status = 'closed', closed_at = ?, final_counts = (
       SELECT json_group_array(json_object('questionId',question_id,'optionIndex',option_index,'count',count))
       FROM (SELECT question_id,option_index,COUNT(*) AS count FROM answers GROUP BY question_id,option_index)
-    ) WHERE id = 1 AND status = 'open'`,
+    ) WHERE id = 1 AND status = 'open' AND round = ?`,
       )
-      .bind(new Date().toISOString())
+      .bind(new Date().toISOString(), event.round)
       .run();
     return this.getPublicEvent();
   }
@@ -361,8 +407,9 @@ export class EventService {
       : null;
   }
 
-  async draw(): Promise<DrawResult> {
+  async draw(expectedRound?: number): Promise<DrawResult> {
     const event = await this.event();
+    assertCurrentRound(event, expectedRound);
     const saved = await this.savedDraw();
     if (saved) return saved;
     if (event.status !== "closed" || event.final_counts === null)
@@ -392,7 +439,7 @@ export class EventService {
       this.db
         .prepare(
           `INSERT INTO draws (event_id,winners,candidates,eligible_count,drawn_at)
-        SELECT 1,?,?,?,? FROM events WHERE id = 1 AND status = 'closed'
+        SELECT 1,?,?,?,? FROM events WHERE id = 1 AND status = 'closed' AND round = ?
         ON CONFLICT (event_id) DO NOTHING`,
         )
         .bind(
@@ -402,13 +449,17 @@ export class EventService {
           ),
           candidates.length,
           new Date().toISOString(),
+          event.round,
         ),
-      this.db.prepare(
-        "UPDATE events SET status = 'drawn' WHERE id = 1 AND status = 'closed' AND EXISTS (SELECT 1 FROM draws WHERE event_id = 1)",
-      ),
+      this.db
+        .prepare(
+          "UPDATE events SET status = 'drawn' WHERE id = 1 AND status = 'closed' AND round = ? AND EXISTS (SELECT 1 FROM draws WHERE event_id = 1)",
+        )
+        .bind(event.round),
     ]);
     const result = await this.savedDraw();
-    if (!result) throw new Error("Draw was not persisted.");
+    if (!result)
+      throw new AppError(409, "행사가 다시 시작되었습니다. 화면을 새로고침해 주세요.");
     return result;
   }
 
