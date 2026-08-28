@@ -31,10 +31,15 @@ type ParticipantRow = {
 type CountRow = { questionId: number; optionIndex: number; count: number };
 type AnswerRow = { questionId: number; optionIndex: number };
 type EntryRow = ParticipantRow & { answerData: string };
+type ScoredEntry = Omit<LeaderboardEntry, "score"> & { score: number };
 const SESSION_LIFETIME = 30 * 24 * 60 * 60 * 1000;
 
 function isRevealed(event: EventRow, questionId: number): boolean {
   return (event.revealed_questions & (1 << (questionId - 1))) !== 0;
+}
+
+function allQuestionsRevealed(event: EventRow): boolean {
+  return questions.every((question) => isRevealed(event, question.id));
 }
 
 function assertCurrentRound(event: EventRow, expected?: number) {
@@ -262,12 +267,13 @@ export class EventService {
         ? scoreOptions(counts[answer.questionId - 1])[answer.optionIndex]
         : null,
     }));
+    assertCurrentRound(await this.event(), event.round);
     return {
       displayName: participant.name,
       code: participant.id.slice(0, 8).toUpperCase(),
       answers,
       completed: answers.length === 10,
-      score: questions.every((question) => isRevealed(event, question.id))
+      score: allQuestionsRevealed(event)
         ? answers.reduce((sum, answer) => sum + (answer.points ?? 0), 0)
         : null,
       final: event.final_counts !== null,
@@ -354,13 +360,14 @@ export class EventService {
     const counts = (await this.counts(event))[questionId - 1];
     const total = counts.reduce((sum, count) => sum + count, 0);
     const revealed = isRevealed(event, questionId);
+    assertCurrentRound(await this.event(), event.round);
     return {
       questionId,
-      counts,
+      counts: revealed ? counts : [],
       total,
-      percentages: counts.map((count) =>
+      percentages: revealed ? counts.map((count) =>
         total ? Math.round((count / total) * 1000) / 10 : 0,
-      ),
+      ) : [],
       points: revealed ? scoreOptions(counts) : [],
       revealed,
       selectedIndex: answer.optionIndex,
@@ -391,7 +398,7 @@ export class EventService {
     counts: number[][],
     completeOnly = false,
     page?: number,
-  ): Promise<LeaderboardEntry[]> {
+  ): Promise<ScoredEntry[]> {
     const rows = await this.db
       .prepare(
         `SELECT p.id,p.name,p.created_at,p.completed_at,
@@ -445,6 +452,8 @@ export class EventService {
   async draw(expectedRound?: number): Promise<DrawResult> {
     const event = await this.event();
     assertCurrentRound(event, expectedRound);
+    if (!allQuestionsRevealed(event))
+      throw new AppError(409, "10개 문항의 결과를 모두 공개한 뒤 추첨해 주세요.");
     const saved = await this.savedDraw();
     if (saved) return saved;
     if (event.status !== "closed" || event.final_counts === null)
@@ -505,25 +514,35 @@ export class EventService {
       ? Math.min(Math.max(page, 1), totalPages)
       : 1;
     const counts = await this.counts(await this.event());
+    const scoresVisible = questions.every((question) => event.revealedQuestions.includes(question.id));
+    const participants = await this.entries(counts, false, safePage);
+    const draw = scoresVisible ? await this.savedDraw() : null;
+    // A reset must not apply the previous round's reveal flags to fresh records.
+    assertCurrentRound(await this.event(), event.round);
     return {
       event,
       distributions: counts.map((values, index) => ({
         questionId: index + 1,
-        counts: values,
+        counts: event.revealedQuestions.includes(index + 1) ? values : [],
         total: values.reduce((sum, count) => sum + count, 0),
-        points: scoreOptions(values),
+        points: event.revealedQuestions.includes(index + 1) ? scoreOptions(values) : [],
       })),
-      participants: await this.entries(counts, false, safePage),
+      participants: participants.map((person) => ({
+        ...person,
+        score: scoresVisible ? person.score : null,
+      })),
       page: safePage,
       pageSize: 50,
       totalPages,
-      draw: await this.savedDraw(),
+      draw,
     };
   }
 
   async exportCsv(): Promise<string> {
     const event = await this.event();
+    const scoresVisible = allQuestionsRevealed(event);
     const rows = await this.entries(await this.counts(event));
+    assertCurrentRound(await this.event(), event.round);
     const header = [
       "참가코드",
       "닉네임",
@@ -540,8 +559,8 @@ export class EventService {
           row.code,
           row.name,
           String(row.answeredCount),
-          String(row.score),
-          event.final_counts === null ? "잠정" : "확정",
+          scoresVisible ? String(row.score) : "공개 대기",
+          !scoresVisible ? "미공개" : event.final_counts === null ? "잠정" : "확정",
           row.completed ? "대상" : "미완료",
         ]),
       ]

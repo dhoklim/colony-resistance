@@ -116,6 +116,19 @@ test("a public one-use event needs only nicknames and start, close and draw acti
     assert.equal(waiting.participant.score, null);
     assert.equal(waiting.participant.answers.at(-1)?.points, null);
     assert.deepEqual(waiting.distribution.points, []);
+    assert.deepEqual(waiting.distribution.counts, []);
+    assert.deepEqual(waiting.distribution.percentages, []);
+    const poll = await publicApi.handle("answer", request(`/api/answer?questionId=${questionId}`, undefined, { cookie }));
+    const polled = ((await poll.json()) as { distribution: Distribution }).distribution;
+    assert.deepEqual(polled.counts, []);
+    assert.deepEqual(polled.percentages, []);
+    const adminRead = await publicApi.handle("admin", request("/api/admin"));
+    const hiddenAdmin = (await adminRead.json()) as AdminSnapshot;
+    assert.deepEqual(hiddenAdmin.distributions[questionId - 1].counts, []);
+    assert.deepEqual(hiddenAdmin.distributions[questionId - 1].points, []);
+    assert.equal(hiddenAdmin.participants[0].score, null);
+    const hiddenCsv = await publicApi.handle("export", request("/api/admin/export"));
+    assert.match(await hiddenCsv.text(), /"공개 대기","미공개"/);
     if (questionId < 10) {
       const tooEarly = await publicApi.handle(
         "answer",
@@ -141,7 +154,10 @@ test("a public one-use event needs only nicknames and start, close and draw acti
       "answer",
       request(`/api/answer?questionId=${questionId}`, undefined, { cookie }),
     );
-    assert.equal(((await visible.json()) as { distribution: Distribution }).distribution.revealed, true);
+    const shown = ((await visible.json()) as { distribution: Distribution }).distribution;
+    assert.equal(shown.revealed, true);
+    assert.deepEqual(shown.counts, [1, 0, 0, 0]);
+    assert.deepEqual(shown.percentages, [100, 0, 0, 0]);
   }
   const completed = await publicApi.handle("participant", request("/api/participant", undefined, { cookie }));
   assert.equal(((await completed.json()) as { participant: ParticipantSnapshot }).participant.score, 0);
@@ -223,7 +239,7 @@ test("a public one-use event needs only nicknames and start, close and draw acti
   assert.equal(newAnswer.status, 200);
   assert.deepEqual(
     ((await newAnswer.json()) as { distribution: Distribution }).distribution.counts,
-    [0, 1, 0, 0],
+    [],
   );
   const staleClose = await publicApi.handle(
     "admin",
@@ -368,7 +384,8 @@ test("registration uses an HttpOnly session cookie and public responses omit oth
   );
   assert.equal(answer.status, 200);
   const answered = (await answer.json()) as { distribution: Distribution };
-  assert.deepEqual(answered.distribution.counts, [1, 0, 0, 0]);
+  assert.deepEqual(answered.distribution.counts, []);
+  assert.equal(answered.distribution.selectedIndex, 0);
   const restored = await api().handle(
     "participant",
     request("/api/participant", undefined, { cookie }),

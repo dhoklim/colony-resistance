@@ -136,6 +136,7 @@ test("duplicate and concurrent answer submissions count exactly once and lock th
     service.submitAnswer(a.id, 1, 0),
     service.submitAnswer(a.id, 1, 0),
   ]);
+  await service.reveal(1, 1);
   const result = await service.getDistribution(a.id, 1);
   assert.deepEqual(result.counts, [1, 0, 0, 0]);
   await assert.rejects(() => service.submitAnswer(a.id, 1, 1), { status: 409 });
@@ -158,7 +159,7 @@ test("separate participants see shared counts and saved progress after reconnect
   await service.submitAnswer(b.id, 1, 1);
   assert.deepEqual(
     (await service.getDistribution(a.id, 1)).counts,
-    [1, 1, 0, 0],
+    [],
   );
   assert.equal(
     (await new EventService(db).getParticipantByToken("1".padStart(64, "0")))
@@ -169,6 +170,7 @@ test("separate participants see shared counts and saved progress after reconnect
   assert.equal(snapshot.answers.length, 1);
   assert.equal(snapshot.answers[0].points, null);
   await service.reveal(1, 1);
+  assert.deepEqual((await service.getDistribution(a.id, 1)).counts, [1, 1, 0, 0]);
   assert.equal((await service.getParticipant(a.id)).answers[0].points, 1);
 });
 
@@ -179,7 +181,13 @@ test("answers wait for their question's reveal before showing points or advancin
   const first = await service.submitAnswer(a.id, 1, 0);
   await service.submitAnswer(b.id, 1, 1);
   assert.deepEqual(first.points, []);
+  assert.deepEqual(first.counts, []);
+  assert.deepEqual(first.percentages, []);
   assert.equal(first.revealed, false);
+  const refreshed = await new EventService(db).getDistribution(a.id, 1);
+  assert.deepEqual(refreshed.counts, []);
+  assert.deepEqual(refreshed.percentages, []);
+  assert.equal(refreshed.total, 2);
   const hidden = await service.getParticipant(a.id);
   assert.equal(hidden.answers[0].points, null);
   assert.equal(hidden.score, null);
@@ -187,16 +195,109 @@ test("answers wait for their question's reveal before showing points or advancin
   await service.reveal(1, 1);
   const visible = await new EventService(db).getDistribution(a.id, 1);
   assert.equal(visible.revealed, true);
+  assert.deepEqual(visible.counts, [1, 1, 0, 0]);
+  assert.deepEqual(visible.percentages, [50, 50, 0, 0]);
   assert.deepEqual(visible.points, [1, 1, 5, 5]);
   const second = await service.submitAnswer(a.id, 2, 0);
   assert.equal(second.revealed, false);
   assert.deepEqual(second.points, []);
   await service.close();
-  assert.equal((await service.getDistribution(a.id, 2)).revealed, false);
+  const closed = await service.getDistribution(a.id, 2);
+  assert.equal(closed.revealed, false);
+  assert.deepEqual(closed.counts, []);
+  assert.deepEqual(closed.percentages, []);
   assert.equal((await service.getParticipant(a.id)).score, null);
   await service.reveal(2, 1);
   assert.equal((await service.getParticipant(a.id)).answers[1].points, 0);
 });
+
+test("admin views and CSV cannot disclose unreleased results, even after closing", async () => {
+  await openEvent();
+  const a = await register(1);
+  const b = await register(2);
+  await service.submitAnswer(a.id, 1, 0);
+  await service.submitAnswer(b.id, 1, 1);
+  for (const final of [false, true]) {
+    if (final) await service.close(1);
+    const snapshot = await new EventService(db, true).getAdminSnapshot();
+    assert.deepEqual(snapshot.distributions[0], {
+      questionId: 1, counts: [], total: 2, points: [],
+    });
+    assert.ok(snapshot.distributions.every((question) => question.counts.length === 0 && question.points.length === 0));
+    assert.ok(snapshot.participants.every((person) => person.score === null));
+    assert.match(await service.exportCsv(), /"1","공개 대기","미공개"/);
+  }
+  await service.reveal(1, 1);
+  const partial = await service.getAdminSnapshot();
+  assert.deepEqual(partial.distributions[0].counts, [1, 1, 0, 0]);
+  assert.deepEqual(partial.distributions[0].points, [1, 1, 5, 5]);
+  assert.deepEqual(partial.distributions[1].points, []);
+  assert.ok(partial.participants.every((person) => person.score === null));
+  for (let questionId = 2; questionId <= 10; questionId++) await service.reveal(questionId, 1);
+  const publicScores = await service.getAdminSnapshot();
+  assert.deepEqual(publicScores.participants.map((person) => person.score), [1, 1]);
+  assert.match(await service.exportCsv(), /"1","1","확정"/);
+});
+
+test("drawing cannot disclose the last unreleased score", async () => {
+  await openEvent();
+  const a = await register(1);
+  for (let questionId = 1; questionId <= 10; questionId++) {
+    await service.submitAnswer(a.id, questionId, 0);
+    if (questionId < 10) await service.reveal(questionId, 1);
+  }
+  await service.close(1);
+  await assert.rejects(() => service.draw(1), { status: 409 });
+  assert.equal((await service.getAdminSnapshot()).draw, null);
+  await service.reveal(10, 1);
+  const draw = await service.draw(1);
+  assert.equal(draw.winners[0].score, 0);
+  // A legacy saved draw must not expose scores when its release flags are absent.
+  await db.prepare("UPDATE events SET revealed_questions = 0 WHERE id = 1").run();
+  assert.equal((await service.getAdminSnapshot()).draw, null);
+});
+
+for (const surface of ["participant", "distribution", "admin", "CSV"] as const) {
+  test(`a reset during ${surface} reads cannot apply old reveals to new answers`, async () => {
+    await openEvent();
+    const previous = await register(1);
+    await service.submitAnswer(previous.id, 1, 0);
+    for (let questionId = 1; questionId <= 10; questionId++) await service.reveal(questionId, 1);
+    let resetTriggered = false;
+    const racing = new EventService({
+      prepare(sql: string) {
+        const statement = db.prepare(sql);
+        return new Proxy(statement, {
+          get(target, key, receiver) {
+            if (key === "all" && sql.startsWith("SELECT question_id AS questionId")) {
+              return async (...args: unknown[]) => {
+                if (!resetTriggered) {
+                  resetTriggered = true;
+                  await service.reset(1);
+                  const next = await register(2);
+                  await service.submitAnswer(next.id, 1, 1, 2);
+                }
+                return Reflect.apply(target.all, target, args);
+              };
+            }
+            const value = Reflect.get(target, key, receiver);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      },
+      batch: db.batch.bind(db),
+    }, true);
+    const read = {
+      participant: () => racing.getParticipant(previous.id),
+      distribution: () => racing.getDistribution(previous.id, 1),
+      admin: () => racing.getAdminSnapshot(),
+      CSV: () => racing.exportCsv(),
+    }[surface];
+    await assert.rejects(read, { status: 409 });
+    assert.equal(resetTriggered, true);
+    assert.deepEqual((await service.getPublicEvent()).revealedQuestions, []);
+  });
+}
 
 test("reveals persist independently, validate their target, and reset with the round", async () => {
   await assert.rejects(() => service.reveal(1, 1), { status: 409 });
@@ -220,6 +321,7 @@ test("closing freezes counts, prevents new answers and registrations, and makes 
   await assert.rejects(() => service.submitAnswer(a.id, 2, 0), { status: 409 });
   await assert.rejects(() => register(2), { status: 409 });
   assert.equal((await service.getParticipant(a.id)).final, true);
+  await service.reveal(1, 1);
   assert.deepEqual(
     (await service.getDistribution(a.id, 1)).counts,
     [1, 0, 0, 0],
@@ -298,9 +400,10 @@ test("reset clears a finished event and lets the same browser participate in a f
   const next = await register(1);
   assert.notEqual(next.id, previous.id);
   const answer = await service.submitAnswer(next.id, 1, 2);
-  assert.deepEqual(answer.counts, [0, 0, 1, 0]);
+  assert.deepEqual(answer.counts, []);
   assert.equal(answer.final, false);
   await service.reveal(1, 2);
+  assert.deepEqual((await service.getDistribution(next.id, 1)).counts, [0, 0, 1, 0]);
   for (let questionId = 2; questionId <= 10; questionId++) {
     await service.submitAnswer(next.id, questionId, 2);
     await service.reveal(questionId, 2);
@@ -322,7 +425,8 @@ test("duplicate resets and stale controls cannot clear or close the new round", 
   await Promise.all([service.reset(1), service.reset(1)]);
   assert.equal((await service.getPublicEvent()).round, 2);
   assert.equal((await service.getPublicEvent()).participantCount, 1);
-  assert.deepEqual((await service.getDistribution(next.id, 1)).counts, [0, 0, 1, 0]);
+  assert.deepEqual((await service.getDistribution(next.id, 1)).counts, []);
+  assert.deepEqual((await service.getParticipant(next.id)).answers, [{ questionId: 1, optionIndex: 2, points: null }]);
   await assert.rejects(() => service.close(1), { status: 409 });
   await assert.rejects(() => service.draw(1), { status: 409 });
   await assert.rejects(() => service.reset(0), { status: 400 });

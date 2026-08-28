@@ -52,6 +52,7 @@ export default function AdminDashboard({
   const page = useRef(initial.page);
   const event = data.event;
   const isFinal = event.status === "closed" || event.status === "drawn";
+  const scoresVisible = questions.every((question) => event.revealedQuestions.includes(question.id));
 
   const accept = useCallback((snapshot: AdminSnapshot) => {
     setData(snapshot);
@@ -117,7 +118,7 @@ export default function AdminDashboard({
     try {
       accept(await apiJson<AdminSnapshot>("/api/admin", body));
       setMessage(body.action === "reveal"
-        ? `${body.questionId}번 문항의 점수를 공개했습니다.`
+        ? `${body.questionId}번 문항의 결과를 공개했습니다.`
         : actionCopy[body.action].success);
       setAction(null);
     } catch (caught) {
@@ -208,7 +209,7 @@ export default function AdminDashboard({
                 <Ticket size={15} aria-hidden="true" /> 선정된 당첨자
               </span>
               <strong>
-                {data.draw?.winners.length ?? 0}
+                {scoresVisible ? data.draw?.winners.length ?? 0 : 0}
                 <small>/ 2명</small>
               </strong>
             </div>
@@ -249,7 +250,7 @@ export default function AdminDashboard({
             {event.status === "closed" && (
               <button
                 className="button button-primary"
-                disabled={pending || event.completedCount === 0}
+                disabled={pending || event.completedCount === 0 || !scoresVisible}
                 onClick={() => choose("draw")}
               >
                 당첨자 2명 선정 <Ticket size={16} aria-hidden="true" />
@@ -273,7 +274,10 @@ export default function AdminDashboard({
               10문항 완료자가 없어 추첨할 수 없습니다.
             </p>
           )}
-          {data.draw && (
+          {event.status === "closed" && event.completedCount > 0 && !scoresVisible && (
+            <p className="small-note">10개 문항의 결과를 모두 공개한 뒤 추첨할 수 있습니다.</p>
+          )}
+          {scoresVisible && data.draw && (
             <section
               className="panel winners-panel"
               aria-labelledby="winners-title"
@@ -309,11 +313,11 @@ export default function AdminDashboard({
           )}
           <section className="panel reveal-panel" aria-labelledby="reveal-title">
             <div className="section-heading">
-              <h2 id="reveal-title">문항별 점수 공개</h2>
+              <h2 id="reveal-title">문항별 결과 공개</h2>
               <span className="badge">{event.revealedQuestions.length} / 10 공개</span>
             </div>
             <p className="small-note">
-              답변이 모이면 해당 문항의 점수를 공개하세요. 참가자는 공개 후 다음 문항으로 넘어갈 수 있습니다.
+              답변이 모이면 해당 문항의 결과를 공개하세요. 선택 비율과 점수가 함께 표시되며, 참가자는 다음 문항으로 넘어갈 수 있습니다.
             </p>
             <div className="question-reveal-grid">
               {questions.map((question) => {
@@ -324,19 +328,19 @@ export default function AdminDashboard({
                     type="button"
                     key={question.id}
                     className={`reveal-question${revealed ? " is-revealed" : ""}`}
-                    aria-label={`${question.id}번 문항 점수 공개`}
+                    aria-label={`${question.id}번 문항 결과 공개`}
                     disabled={pending || event.status === "draft" || revealed}
                     onClick={() => void mutate({ action: "reveal", questionId: question.id, round: event.round })}
                   >
                     <span>{String(question.id).padStart(2, "0")}번 문항</span>
-                    <strong>{revealed ? "공개 완료" : "점수 공개"}</strong>
+                    <strong>{revealed ? "공개 완료" : "결과 공개"}</strong>
                     <small>{total}명 응답</small>
                   </button>
                 );
               })}
             </div>
             <p className="small-note">
-              점수 공개는 응답을 마감하지 않습니다. 공개한 점수도 행사 마감 전까지 응답에 따라 달라질 수 있습니다.
+              공개 전에는 운영실에서도 응답 수만 보입니다. 공개한 점수는 행사 마감 전까지 응답에 따라 달라질 수 있습니다.
             </p>
           </section>
           <div className="admin-grid">
@@ -384,8 +388,9 @@ export default function AdminDashboard({
                             </span>
                           </td>
                           <td className="table-score">
-                            {person.score}
-                            <small> / 50</small>
+                            {scoresVisible && person.score !== null ? <>
+                              {person.score}<small> / 50</small>
+                            </> : <span className="review-pending">공개 대기</span>}
                           </td>
                         </tr>
                       ))}
@@ -423,7 +428,7 @@ export default function AdminDashboard({
                   </div>
                 </div>
                 <p className="small-note">
-                  같은 닉네임은 참가 코드로 구분할 수 있습니다.
+                  총점은 10개 문항의 결과를 모두 공개하면 표시됩니다. 같은 닉네임은 참가 코드로 구분할 수 있습니다.
                 </p>
               </section>
               <section
@@ -443,6 +448,7 @@ export default function AdminDashboard({
                 </p>
                 {data.distributions.map((result) => {
                   const question = questions[result.questionId - 1];
+                  const revealed = event.revealedQuestions.includes(result.questionId);
                   return (
                     <details
                       key={result.questionId}
@@ -456,7 +462,7 @@ export default function AdminDashboard({
                         <small>{result.total}명 응답</small>
                       </summary>
                       <p>{question.prompt}</p>
-                      <div className="aggregate-options">
+                      {revealed ? <div className="aggregate-options">
                         {question.options.map((option, index) => {
                           const percentage = result.total
                             ? Math.round(
@@ -484,7 +490,7 @@ export default function AdminDashboard({
                             </div>
                           );
                         })}
-                      </div>
+                      </div> : <p className="small-note">결과 공개 대기 · 선택 비율과 배점은 공개 후 표시됩니다.</p>}
                     </details>
                   );
                 })}

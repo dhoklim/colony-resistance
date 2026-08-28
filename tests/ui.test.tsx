@@ -4,6 +4,9 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import Home from "../app/page.tsx";
 import { Completion } from "../app/components/completion.tsx";
+import { QuestionStage } from "../app/components/question-stage.tsx";
+import AdminDashboard from "../app/components/admin-dashboard.tsx";
+import { questions } from "../app/lib/questions.ts";
 import { JSDOM } from "jsdom";
 import { createApiClient } from "../app/lib/client.ts";
 import type {
@@ -18,6 +21,59 @@ test("the event introduction provides a participant entry link", () => {
   assert.match(html, /<a[^>]+href="\/participate"[^>]*>/);
 });
 
+test("an unreleased answer hides ratios, bars and points even if a stale response includes them", () => {
+  const distribution: Distribution = {
+    questionId: 1, counts: [1, 2, 3, 4], total: 10,
+    percentages: [10, 20, 30, 40], points: [5, 3, 1, 0],
+    revealed: false, selectedIndex: 0, final: false,
+    updatedAt: "2026-08-28T00:00:00Z",
+  };
+  const render = () => new JSDOM(renderToStaticMarkup(
+    <QuestionStage question={questions[0]} selection={0} distribution={distribution}
+      pending={false} onSelect={() => {}} onSubmit={async () => {}} onNext={() => {}} />,
+  ));
+  const hidden = render();
+  assert.equal(hidden.window.document.querySelector(".option-percentage, .option-fill, .chosen-ratio, .earned-points strong"), null);
+  assert.equal(hidden.window.document.body.textContent?.includes("%"), false);
+  assert.equal(hidden.window.document.querySelector("button")?.disabled, true);
+  hidden.window.close();
+  distribution.revealed = true;
+  const visible = render();
+  assert.equal(visible.window.document.querySelectorAll(".option-percentage").length, 4);
+  assert.match(visible.window.document.querySelector(".earned-points")?.textContent ?? "", /\+5/);
+  assert.equal(visible.window.document.querySelector("button")?.disabled, false);
+  visible.window.close();
+});
+
+test("the public operator page also hides unreleased distributions and totals", () => {
+  const initial: AdminSnapshot = {
+    event: {
+      status: "open", round: 1, revealedQuestions: [], publicAdmin: true,
+      settings: { organizer: "", privacyContact: "", retentionDays: 0, instagramUrl: "" },
+      participantCount: 1, completedCount: 0, closedAt: null, privacyVersion: 2,
+    },
+    distributions: [{ questionId: 1, counts: [1, 2, 3, 4], total: 10, points: [5, 3, 1, 0] }],
+    participants: [{ id: "test", name: "테스트", code: "TEST0001", completed: false,
+      answeredCount: 1, score: 5, registeredAt: "2026-08-28T00:00:00Z" }],
+    page: 1, pageSize: 50, totalPages: 1, draw: null,
+  };
+  const render = () => new JSDOM(renderToStaticMarkup(<AdminDashboard initial={initial} />));
+  const hidden = render();
+  assert.equal(hidden.window.document.querySelector(".aggregate-bar, .aggregate-label b"), null);
+  assert.match(hidden.window.document.querySelector(".table-score")?.textContent ?? "", /공개 대기/);
+  assert.match(hidden.window.document.querySelector(".aggregate-question")?.textContent ?? "", /10명 응답/);
+  hidden.window.close();
+  initial.event.revealedQuestions = [1];
+  const partial = render();
+  assert.equal(partial.window.document.querySelectorAll(".aggregate-bar").length, 4);
+  assert.match(partial.window.document.querySelector(".table-score")?.textContent ?? "", /공개 대기/);
+  partial.window.close();
+  initial.event.revealedQuestions = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+  const complete = render();
+  assert.match(complete.window.document.querySelector(".table-score")?.textContent ?? "", /5.*50/);
+  complete.window.close();
+});
+
 test("a completed participant sees only revealed answer points until all ten scores are public", () => {
   const event: PublicEvent = {
     status: "closed", round: 1, revealedQuestions: [1],
@@ -26,9 +82,9 @@ test("a completed participant sees only revealed answer points until all ten sco
     privacyVersion: 2, publicAdmin: true,
   };
   const participant: ParticipantSnapshot = {
-    displayName: "테스트", code: "TEST0001", completed: true, final: true, score: null,
+    displayName: "테스트", code: "TEST0001", completed: true, final: true, score: 50,
     answers: Array.from({ length: 10 }, (_, index) => ({
-      questionId: index + 1, optionIndex: 0, points: index === 0 ? 5 : null,
+      questionId: index + 1, optionIndex: 0, points: 5,
     })),
   };
   const hidden = new JSDOM(renderToStaticMarkup(<Completion participant={participant} event={event} />));
@@ -228,7 +284,7 @@ test("operators start without setup and close with a simple retryable confirmati
   assert.equal(view.queryByLabelText("운영 주체"), null);
   assert.equal(view.queryByLabelText("개인정보 문의처"), null);
   const start = view.getByRole("button", { name: "이벤트 시작하기" });
-  assert.equal((view.getByRole("button", { name: "1번 문항 점수 공개" }) as HTMLButtonElement).disabled, true);
+  assert.equal((view.getByRole("button", { name: "1번 문항 결과 공개" }) as HTMLButtonElement).disabled, true);
   assert.equal((start as HTMLButtonElement).disabled, false);
   fireEvent.click(start);
   await view.findByRole("button", { name: "응답 마감하기" });
@@ -260,12 +316,12 @@ test("operators start without setup and close with a simple retryable confirmati
   await view.findByText("기록을 초기화하고 행사를 다시 시작했습니다.");
   assert.deepEqual(requests[3], { action: "reset", round: 1 });
   assert.ok(view.getByRole("button", { name: "응답 마감하기" }));
-  const reveal = view.getByRole("button", { name: "1번 문항 점수 공개" });
+  const reveal = view.getByRole("button", { name: "1번 문항 결과 공개" });
   fireEvent.click(reveal);
-  await view.findByText("1번 문항의 점수를 공개했습니다.");
+  await view.findByText("1번 문항의 결과를 공개했습니다.");
   assert.deepEqual(requests[4], { action: "reveal", questionId: 1, round: 2 });
   assert.equal((reveal as HTMLButtonElement).disabled, true);
-  assert.equal((view.getByRole("button", { name: "2번 문항 점수 공개" }) as HTMLButtonElement).disabled, false);
+  assert.equal((view.getByRole("button", { name: "2번 문항 결과 공개" }) as HTMLButtonElement).disabled, false);
 });
 
 test("a participant can recover a failed submission and complete all ten questions without seeing results early", async (t) => {
@@ -378,9 +434,9 @@ test("a participant can recover a failed submission and complete all ten questio
           participant.completed = participant.answers.length === 10;
           distribution = {
             questionId: body.questionId,
-            counts: [1, 0, 0, 0],
+            counts: [],
             total: 1,
-            percentages: [100, 0, 0, 0],
+            percentages: [],
             points: [],
             revealed: false,
             selectedIndex: 0,
@@ -397,19 +453,25 @@ test("a participant can recover a failed submission and complete all ten questio
     await import("../app/components/participation.tsx");
   const view = render(<Participation />);
   async function revealQuestion(questionId: number) {
-    const waiting = await view.findByRole("button", { name: "점수 공개 대기 중" });
+    const waiting = await view.findByRole("button", { name: "결과 공개 대기 중" });
     assert.equal((waiting as HTMLButtonElement).disabled, true);
     assert.equal(view.container.querySelector(".earned-points strong") === null, true);
+    assert.equal(view.container.querySelector(".option-percentage, .option-fill, .chosen-ratio"), null);
+    assert.equal(view.queryByLabelText("선택 비율 결과"), null);
     fireEvent.click(waiting);
     assert.equal(view.queryByRole("button", { name: /이 선택으로 결정하기/ }) === null, true);
     event.revealedQuestions.push(questionId);
     distribution!.revealed = true;
+    distribution!.counts = [1, 0, 0, 0];
+    distribution!.percentages = [100, 0, 0, 0];
     distribution!.points = [0, 5, 5, 5];
     participant.answers[questionId - 1].points = 0;
     if (questionId === 10) participant.score = 0;
     fireEvent(dom.window.document, new dom.window.Event("visibilitychange"));
     const next = await view.findByRole("button", { name: questionId === 10 ? /나의 저항도 확인/ : /다음 상황으로/ });
     assert.equal((next as HTMLButtonElement).disabled, false);
+    assert.ok(view.getByLabelText("선택 비율 결과"));
+    assert.equal(view.container.querySelectorAll(".option-percentage").length, 4);
   }
   fireEvent.change(await view.findByLabelText("닉네임"), {
     target: { value: "테스트" },
@@ -425,7 +487,6 @@ test("a participant can recover a failed submission and complete all ten questio
   await view.findByText("연결을 확인해 주세요.");
   assert.equal((first as HTMLInputElement).checked, true);
   fireEvent.click(view.getByRole("button", { name: /이 선택으로 결정하기/ }));
-  await view.findByLabelText("선택 비율 결과");
   await revealQuestion(1);
   fireEvent.click(view.getByRole("button", { name: /다음 상황으로/ }));
   for (let question = 2; question <= 10; question++) {
@@ -433,7 +494,6 @@ test("a participant can recover a failed submission and complete all ten questio
     assert.equal(view.queryByLabelText("선택 비율 결과"), null);
     fireEvent.click(view.getAllByRole("radio")[0]);
     fireEvent.click(view.getByRole("button", { name: /이 선택으로 결정하기/ }));
-    await view.findByLabelText("선택 비율 결과");
     await revealQuestion(question);
     fireEvent.click(
       view.getByRole("button", {
@@ -466,9 +526,9 @@ test("a participant can recover a failed submission and complete all ten questio
   participant.answers = [{ questionId: 1, optionIndex: 1, points: null }];
   distribution = {
     questionId: 1,
-    counts: [0, 1, 0, 0],
+    counts: [],
     total: 1,
-    percentages: [0, 100, 0, 0],
+    percentages: [],
     points: [],
     revealed: false,
     selectedIndex: 1,
@@ -482,8 +542,9 @@ test("a participant can recover a failed submission and complete all ten questio
     holdSavedDistribution = false;
     releaseSavedDistribution!();
   });
-  await view.findByLabelText("선택 비율 결과");
-  assert.equal((view.getByRole("button", { name: "점수 공개 대기 중" }) as HTMLButtonElement).disabled, true);
+  await view.findByLabelText("결과 공개 대기");
+  assert.equal((view.getByRole("button", { name: "결과 공개 대기 중" }) as HTMLButtonElement).disabled, true);
+  assert.equal(view.queryByLabelText("선택 비율 결과"), null);
   assert.equal(
     (view.getByRole("radio", { name: /일단 거리를 둔다/ }) as HTMLInputElement).checked,
     true,

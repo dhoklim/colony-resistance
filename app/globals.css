@@ -2157,10 +2157,21 @@ p {
   font: 10px var(--font-sans);
   padding-left: 4px;
 }
-.earned-points > .score-pending {
-  border: 1px solid var(--line);
-  padding: 7px 9px;
-  font-size: 10px;
+.result-waiting {
+  justify-content: flex-start;
+}
+.result-waiting > svg {
+  color: var(--green);
+  flex-shrink: 0;
+}
+.result-waiting strong {
+  font-size: 14px;
+}
+.result-waiting p {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.8;
+  margin-top: 6px;
 }
 .result-disclaimer {
   font-size: 10px;

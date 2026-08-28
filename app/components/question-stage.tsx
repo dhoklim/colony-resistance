@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef } from "react";
-import { ArrowRight, Check, Radio } from "lucide-react";
+import { ArrowRight, Check, Clock3, Radio } from "lucide-react";
 import { optionMarkers, type Question } from "../lib/questions";
 import type { Distribution } from "../lib/contracts";
 import { Scene } from "./scene";
@@ -23,6 +23,7 @@ export function QuestionStage({
   onNext: () => void;
 }) {
   const heading = useRef<HTMLHeadingElement>(null);
+  const revealed = distribution?.revealed === true;
   useEffect(() => {
     heading.current?.focus();
   }, [question.id]);
@@ -47,10 +48,10 @@ export function QuestionStage({
         <legend className="sr-only">행동 선택</legend>
         {question.options.map((option, index) => (
           <label
-            className={`option ${selection === index ? "selected" : ""} ${distribution ? "has-result" : ""}`}
+            className={`option ${selection === index ? "selected" : ""} ${revealed ? "has-result" : ""}`}
             key={option}
           >
-            {distribution && (
+            {revealed && distribution && (
               <span
                 className="option-fill"
                 style={{ width: `${distribution.percentages[index]}%` }}
@@ -66,7 +67,7 @@ export function QuestionStage({
             />
             <span className="option-marker">{optionMarkers[index]}</span>
             <span className="option-copy">{option}</span>
-            {distribution ? (
+            {revealed && distribution ? (
               <span className="option-percentage">
                 {distribution.percentages[index]}
                 <small>%</small>
@@ -81,7 +82,7 @@ export function QuestionStage({
       </fieldset>
       {distribution ? (
         <>
-          <section className="distribution-summary" aria-label="선택 비율 결과">
+          {revealed ? <section className="distribution-summary" aria-label="선택 비율 결과">
             <div>
               <p className="live-label">
                 <Radio size={12} aria-hidden="true" />
@@ -96,29 +97,31 @@ export function QuestionStage({
               </p>
             </div>
             <div className="earned-points">
-              {distribution.revealed ? (
-                <>
-                  <span>{distribution.final ? "확정 점수" : "잠정 점수"}</span>
-                  <strong>
-                    +{distribution.points[distribution.selectedIndex]}
-                    <small>점</small>
-                  </strong>
-                </>
-              ) : (
-                <span className="score-pending" role="status">운영자 공개 대기</span>
-              )}
+              <span>{distribution.final ? "확정 점수" : "잠정 점수"}</span>
+              <strong>
+                +{distribution.points[distribution.selectedIndex]}
+                <small>점</small>
+              </strong>
             </div>
-          </section>
+          </section> : (
+            <section className="distribution-summary result-waiting" aria-label="결과 공개 대기" role="status">
+              <Clock3 size={25} aria-hidden="true" />
+              <div>
+                <strong>답변이 저장되었습니다.</strong>
+                <p>선택 비율과 점수는 운영자가 공개하면 표시됩니다.</p>
+              </div>
+            </section>
+          )}
           <p className="result-disclaimer">
-            {!distribution.revealed
-              ? "운영자가 이 문항의 점수를 공개하면 다음 단계로 진행할 수 있습니다."
+            {!revealed
+              ? "결과가 공개되면 화면이 자동으로 바뀌며 다음 문항으로 진행할 수 있습니다."
               : distribution.final
                 ? "행사가 마감되어 선택 비율과 점수가 확정되었습니다."
                 : "선택 비율과 점수는 참가자들의 응답에 따라 달라집니다."}
           </p>
-          <button className="button button-primary full-width" disabled={!distribution.revealed} onClick={onNext}>
-            {!distribution.revealed
-              ? "점수 공개 대기 중"
+          <button className="button button-primary full-width" disabled={!revealed} onClick={onNext}>
+            {!revealed
+              ? "결과 공개 대기 중"
               : question.id === 10
                 ? "나의 저항도 확인"
                 : distribution.final

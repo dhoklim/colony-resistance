@@ -11,8 +11,10 @@ export function Completion({
   participant: ParticipantSnapshot;
   event: PublicEvent;
 }) {
-  const score = participant.score;
-  const revealedCount = participant.answers.filter((answer) => answer.points !== null).length;
+  const score = questions.every((question) => event.revealedQuestions.includes(question.id))
+    ? participant.score : null;
+  const revealedCount = participant.answers.filter((answer) =>
+    event.revealedQuestions.includes(answer.questionId) && answer.points !== null).length;
   return (
     <section className="completion panel">
       <p className="eyebrow">
@@ -98,7 +100,7 @@ export function Completion({
                 {questions[answer.questionId - 1].options[answer.optionIndex]}
               </p>
             </div>
-            {answer.points === null
+            {!event.revealedQuestions.includes(answer.questionId) || answer.points === null
               ? <span className="review-pending">공개 대기</span>
               : <b>+{answer.points}</b>}
           </div>

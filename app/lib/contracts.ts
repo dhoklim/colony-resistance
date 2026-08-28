@@ -41,7 +41,7 @@ export type LeaderboardEntry = {
   code: string;
   completed: boolean;
   answeredCount: number;
-  score: number;
+  score: number | null;
   registeredAt: string;
 };
 export type DrawResult = {
