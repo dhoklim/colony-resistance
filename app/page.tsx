@@ -156,7 +156,7 @@ export default function Home() {
           <article>
             <span>03</span>
             <h3>저항도 확인하기</h3>
-            <p>행사 종료 후 최종 점수를 확정하고 당첨자를 선정합니다.</p>
+            <p>문항마다 운영자가 점수를 공개하면 다음 문항으로 진행합니다.</p>
           </article>
         </div>
       </section>

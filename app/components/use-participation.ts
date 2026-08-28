@@ -208,7 +208,7 @@ export function useParticipation() {
   }
 
   function next() {
-    if (phase !== "result") return;
+    if (phase !== "result" || !distribution?.revealed) return;
     setError("");
     setSyncError("");
     if (questionId === 10) {

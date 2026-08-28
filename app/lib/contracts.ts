@@ -8,6 +8,7 @@ export type Settings = {
 export type PublicEvent = {
   status: EventStatus;
   round: number;
+  revealedQuestions: number[];
   settings: Settings;
   participantCount: number;
   completedCount: number;
@@ -21,6 +22,7 @@ export type Distribution = {
   total: number;
   percentages: number[];
   points: number[];
+  revealed: boolean;
   selectedIndex: number;
   final: boolean;
   updatedAt: string;
@@ -28,9 +30,9 @@ export type Distribution = {
 export type ParticipantSnapshot = {
   displayName: string;
   code: string;
-  answers: { questionId: number; optionIndex: number; points: number }[];
+  answers: { questionId: number; optionIndex: number; points: number | null }[];
   completed: boolean;
-  score: number;
+  score: number | null;
   final: boolean;
 };
 export type LeaderboardEntry = {

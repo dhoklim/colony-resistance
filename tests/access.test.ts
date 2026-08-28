@@ -109,7 +109,42 @@ test("a public one-use event needs only nicknames and start, close and draw acti
       request("/api/answer", { questionId, optionIndex: 0 }, { cookie }),
     );
     assert.equal(answered.status, 200);
+    const waiting = (await answered.json()) as {
+      participant: ParticipantSnapshot;
+      distribution: Distribution;
+    };
+    assert.equal(waiting.participant.score, null);
+    assert.equal(waiting.participant.answers.at(-1)?.points, null);
+    assert.deepEqual(waiting.distribution.points, []);
+    if (questionId < 10) {
+      const tooEarly = await publicApi.handle(
+        "answer",
+        request("/api/answer", { questionId: questionId + 1, optionIndex: 0 }, { cookie }),
+      );
+      assert.equal(tooEarly.status, 409);
+    }
+    if (questionId === 1) {
+      await publicApi.handle("admin", request("/api/admin?action=reveal&questionId=1"));
+      assert.deepEqual((await publicService.getPublicEvent()).revealedQuestions, []);
+      const invalidReveal = await publicApi.handle(
+        "admin",
+        request("/api/admin", { action: "reveal", questionId: "1", round: 1 }),
+      );
+      assert.equal(invalidReveal.status, 400);
+    }
+    const revealed = await publicApi.handle(
+      "admin",
+      request("/api/admin", { action: "reveal", questionId, round: 1 }),
+    );
+    assert.equal(revealed.status, 200);
+    const visible = await publicApi.handle(
+      "answer",
+      request(`/api/answer?questionId=${questionId}`, undefined, { cookie }),
+    );
+    assert.equal(((await visible.json()) as { distribution: Distribution }).distribution.revealed, true);
   }
+  const completed = await publicApi.handle("participant", request("/api/participant", undefined, { cookie }));
+  assert.equal(((await completed.json()) as { participant: ParticipantSnapshot }).participant.score, 0);
   const closed = await publicApi.handle(
     "admin",
     request("/api/admin", { action: "close" }),
@@ -141,6 +176,7 @@ test("a public one-use event needs only nicknames and start, close and draw acti
   const nextRound = (await reset.json()) as AdminSnapshot;
   assert.equal(nextRound.event.status, "open");
   assert.equal(nextRound.event.round, 2);
+  assert.deepEqual(nextRound.event.revealedQuestions, []);
   assert.equal(nextRound.event.participantCount, 0);
   assert.equal(nextRound.draw, null);
   const oldSession = await publicApi.handle(
@@ -194,6 +230,11 @@ test("a public one-use event needs only nicknames and start, close and draw acti
     request("/api/admin", { action: "close", round: 1 }),
   );
   assert.equal(staleClose.status, 409);
+  const staleReveal = await publicApi.handle(
+    "admin",
+    request("/api/admin", { action: "reveal", questionId: 1, round: 1 }),
+  );
+  assert.equal(staleReveal.status, 409);
   assert.equal((await publicService.getPublicEvent()).status, "open");
   const newClose = await publicApi.handle(
     "admin",
@@ -399,6 +440,11 @@ test("two independent HTTP sessions finish the event, receive final scores, and 
       ),
     );
     for (const response of responses) assert.equal(response.status, 200);
+    const revealed = await api(admin).handle(
+      "admin",
+      request("/api/admin", { action: "reveal", questionId, round: 1 }),
+    );
+    assert.equal(revealed.status, 200);
   }
   const totals = await api().handle(
     "answer",

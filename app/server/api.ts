@@ -123,7 +123,11 @@ export class EventApi {
       if (body.action === "start") await this.service.start(round);
       else if (body.action === "close") await this.service.close(round);
       else if (body.action === "draw") await this.service.draw(round);
-      else if (body.action === "reset") {
+      else if (body.action === "reveal") {
+        if (typeof body.questionId !== "number")
+          throw new AppError(400, "공개할 문항을 확인해 주세요.");
+        await this.service.reveal(body.questionId, round);
+      } else if (body.action === "reset") {
         if (typeof body.round !== "number")
           throw new AppError(400, "행사 정보를 확인해 주세요.");
         await this.service.reset(body.round);

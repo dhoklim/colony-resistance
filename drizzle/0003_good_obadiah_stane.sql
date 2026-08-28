@@ -1,0 +1,1 @@
+ALTER TABLE `events` ADD `revealed_questions` integer DEFAULT 0 NOT NULL;

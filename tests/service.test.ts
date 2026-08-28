@@ -116,8 +116,10 @@ test("the nickname migration preserves an ongoing event, existing sessions and s
   assert.equal(participant.code, "1234ABCD");
   assert.equal(participant.displayName, "기존 참가자");
   assert.deepEqual(participant.answers, [
-    { questionId: 1, optionIndex: 2, points: 0 },
+    { questionId: 1, optionIndex: 2, points: null },
   ]);
+  assert.equal(participant.score, null);
+  assert.deepEqual((await upgraded.getPublicEvent()).revealedQuestions, []);
   const columns = await legacy.db.prepare("PRAGMA table_info(participants)").all();
   assert.equal(
     columns.results.some((column: { name: string }) => column.name === "student_id"),
@@ -165,7 +167,49 @@ test("separate participants see shared counts and saved progress after reconnect
   );
   const snapshot = await service.getParticipant(a.id);
   assert.equal(snapshot.answers.length, 1);
-  assert.equal(snapshot.answers[0].points, 1);
+  assert.equal(snapshot.answers[0].points, null);
+  await service.reveal(1, 1);
+  assert.equal((await service.getParticipant(a.id)).answers[0].points, 1);
+});
+
+test("answers wait for their question's reveal before showing points or advancing", async () => {
+  await openEvent();
+  const a = await register(1);
+  const b = await register(2);
+  const first = await service.submitAnswer(a.id, 1, 0);
+  await service.submitAnswer(b.id, 1, 1);
+  assert.deepEqual(first.points, []);
+  assert.equal(first.revealed, false);
+  const hidden = await service.getParticipant(a.id);
+  assert.equal(hidden.answers[0].points, null);
+  assert.equal(hidden.score, null);
+  await assert.rejects(() => service.submitAnswer(a.id, 2, 0), { status: 409 });
+  await service.reveal(1, 1);
+  const visible = await new EventService(db).getDistribution(a.id, 1);
+  assert.equal(visible.revealed, true);
+  assert.deepEqual(visible.points, [1, 1, 5, 5]);
+  const second = await service.submitAnswer(a.id, 2, 0);
+  assert.equal(second.revealed, false);
+  assert.deepEqual(second.points, []);
+  await service.close();
+  assert.equal((await service.getDistribution(a.id, 2)).revealed, false);
+  assert.equal((await service.getParticipant(a.id)).score, null);
+  await service.reveal(2, 1);
+  assert.equal((await service.getParticipant(a.id)).answers[1].points, 0);
+});
+
+test("reveals persist independently, validate their target, and reset with the round", async () => {
+  await assert.rejects(() => service.reveal(1, 1), { status: 409 });
+  await openEvent();
+  for (const questionId of [0, 11, 1.5])
+    await assert.rejects(() => service.reveal(questionId, 1), { status: 400 });
+  await Promise.all([service.reveal(1, 1), service.reveal(2, 1), service.reveal(1, 1)]);
+  assert.deepEqual((await new EventService(db).getPublicEvent()).revealedQuestions, [1, 2]);
+  await Promise.allSettled([service.reveal(3, 1), service.reset(1)]);
+  assert.deepEqual((await service.getPublicEvent()).revealedQuestions, []);
+  await assert.rejects(() => service.reveal(1, 1), { status: 409 });
+  await service.reveal(1, 2);
+  assert.deepEqual((await service.getPublicEvent()).revealedQuestions, [1]);
 });
 
 test("closing freezes counts, prevents new answers and registrations, and makes the score final", async () => {
@@ -205,6 +249,7 @@ test("only complete participants are eligible and repeat or concurrent draws kee
   for (let q = 1; q <= 10; q++) {
     await service.submitAnswer(a.id, q, 0);
     await service.submitAnswer(b.id, q, 1);
+    await service.reveal(q, 1);
   }
   await assert.rejects(() => service.draw(), { status: 409 });
   await service.close();
@@ -232,14 +277,17 @@ test("reset clears a finished event and lets the same browser participate in a f
   await openEvent();
   assert.equal((await service.getPublicEvent()).round, 1);
   const previous = await register(1);
-  for (let questionId = 1; questionId <= 10; questionId++)
+  for (let questionId = 1; questionId <= 10; questionId++) {
     await service.submitAnswer(previous.id, questionId, 0);
+    await service.reveal(questionId, 1);
+  }
   await service.close();
   await service.draw();
   await service.reset(1);
   const restarted = await service.getAdminSnapshot();
   assert.equal(restarted.event.status, "open");
   assert.equal(restarted.event.round, 2);
+  assert.deepEqual(restarted.event.revealedQuestions, []);
   assert.equal(restarted.event.closedAt, null);
   assert.equal(restarted.event.participantCount, 0);
   assert.equal(restarted.event.completedCount, 0);
@@ -252,8 +300,11 @@ test("reset clears a finished event and lets the same browser participate in a f
   const answer = await service.submitAnswer(next.id, 1, 2);
   assert.deepEqual(answer.counts, [0, 0, 1, 0]);
   assert.equal(answer.final, false);
-  for (let questionId = 2; questionId <= 10; questionId++)
+  await service.reveal(1, 2);
+  for (let questionId = 2; questionId <= 10; questionId++) {
     await service.submitAnswer(next.id, questionId, 2);
+    await service.reveal(questionId, 2);
+  }
   await service.close(2);
   const secondDraw = await service.draw(2);
   assert.deepEqual(secondDraw.winners.map((winner) => winner.id), [next.id]);

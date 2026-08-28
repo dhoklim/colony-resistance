@@ -107,7 +107,7 @@ export default function AdminDashboard({
     };
   }, [refresh]);
 
-  async function mutate(body: { action: AdminAction; round: number }) {
+  async function mutate(body: { action: AdminAction | "reveal"; round: number; questionId?: number }) {
     if (busy.current) return;
     busy.current = true;
     generation.current += 1;
@@ -116,7 +116,9 @@ export default function AdminDashboard({
     setMessage("");
     try {
       accept(await apiJson<AdminSnapshot>("/api/admin", body));
-      setMessage(actionCopy[body.action].success);
+      setMessage(body.action === "reveal"
+        ? `${body.questionId}번 문항의 점수를 공개했습니다.`
+        : actionCopy[body.action].success);
       setAction(null);
     } catch (caught) {
       setError(friendlyError(caught));
@@ -305,6 +307,38 @@ export default function AdminDashboard({
               </p>
             </section>
           )}
+          <section className="panel reveal-panel" aria-labelledby="reveal-title">
+            <div className="section-heading">
+              <h2 id="reveal-title">문항별 점수 공개</h2>
+              <span className="badge">{event.revealedQuestions.length} / 10 공개</span>
+            </div>
+            <p className="small-note">
+              답변이 모이면 해당 문항의 점수를 공개하세요. 참가자는 공개 후 다음 문항으로 넘어갈 수 있습니다.
+            </p>
+            <div className="question-reveal-grid">
+              {questions.map((question) => {
+                const revealed = event.revealedQuestions.includes(question.id);
+                const total = data.distributions.find((result) => result.questionId === question.id)?.total ?? 0;
+                return (
+                  <button
+                    type="button"
+                    key={question.id}
+                    className={`reveal-question${revealed ? " is-revealed" : ""}`}
+                    aria-label={`${question.id}번 문항 점수 공개`}
+                    disabled={pending || event.status === "draft" || revealed}
+                    onClick={() => void mutate({ action: "reveal", questionId: question.id, round: event.round })}
+                  >
+                    <span>{String(question.id).padStart(2, "0")}번 문항</span>
+                    <strong>{revealed ? "공개 완료" : "점수 공개"}</strong>
+                    <small>{total}명 응답</small>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="small-note">
+              점수 공개는 응답을 마감하지 않습니다. 공개한 점수도 행사 마감 전까지 응답에 따라 달라질 수 있습니다.
+            </p>
+          </section>
           <div className="admin-grid">
             <div className="admin-primary">
               <section

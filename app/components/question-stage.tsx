@@ -96,24 +96,34 @@ export function QuestionStage({
               </p>
             </div>
             <div className="earned-points">
-              <span>{distribution.final ? "확정 점수" : "잠정 점수"}</span>
-              <strong>
-                +{distribution.points[distribution.selectedIndex]}
-                <small>점</small>
-              </strong>
+              {distribution.revealed ? (
+                <>
+                  <span>{distribution.final ? "확정 점수" : "잠정 점수"}</span>
+                  <strong>
+                    +{distribution.points[distribution.selectedIndex]}
+                    <small>점</small>
+                  </strong>
+                </>
+              ) : (
+                <span className="score-pending" role="status">운영자 공개 대기</span>
+              )}
             </div>
           </section>
           <p className="result-disclaimer">
-            {distribution.final
-              ? "행사가 마감되어 선택 비율과 점수가 확정되었습니다."
-              : "선택 비율과 점수는 참가자들의 응답에 따라 달라집니다."}
-          </p>
-          <button className="button button-primary full-width" onClick={onNext}>
-            {question.id === 10
-              ? "나의 저항도 확인"
+            {!distribution.revealed
+              ? "운영자가 이 문항의 점수를 공개하면 다음 단계로 진행할 수 있습니다."
               : distribution.final
-                ? "마감 안내 확인"
-                : "다음 상황으로"}
+                ? "행사가 마감되어 선택 비율과 점수가 확정되었습니다."
+                : "선택 비율과 점수는 참가자들의 응답에 따라 달라집니다."}
+          </p>
+          <button className="button button-primary full-width" disabled={!distribution.revealed} onClick={onNext}>
+            {!distribution.revealed
+              ? "점수 공개 대기 중"
+              : question.id === 10
+                ? "나의 저항도 확인"
+                : distribution.final
+                  ? "마감 안내 확인"
+                  : "다음 상황으로"}
             <ArrowRight size={18} aria-hidden="true" />
           </button>
         </>

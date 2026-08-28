@@ -15,6 +15,7 @@ import { AppError, isRecord } from "./errors";
 type EventRow = {
   status: EventStatus;
   round: number;
+  revealed_questions: number;
   settings: string;
   privacy_version: number;
   final_counts: string | null;
@@ -31,6 +32,10 @@ type CountRow = { questionId: number; optionIndex: number; count: number };
 type AnswerRow = { questionId: number; optionIndex: number };
 type EntryRow = ParticipantRow & { answerData: string };
 const SESSION_LIFETIME = 30 * 24 * 60 * 60 * 1000;
+
+function isRevealed(event: EventRow, questionId: number): boolean {
+  return (event.revealed_questions & (1 << (questionId - 1))) !== 0;
+}
 
 function assertCurrentRound(event: EventRow, expected?: number) {
   if (expected === undefined) return;
@@ -90,6 +95,7 @@ export class EventService {
     return {
       status: event.status,
       round: event.round,
+      revealedQuestions: questions.filter((question) => isRevealed(event, question.id)).map((question) => question.id),
       settings: JSON.parse(event.settings) as Settings,
       participantCount: counts?.participants ?? 0,
       completedCount: counts?.completed ?? 0,
@@ -132,9 +138,25 @@ export class EventService {
         .prepare("DELETE FROM participants WHERE EXISTS (SELECT 1 FROM events WHERE id = 1 AND round = ?)")
         .bind(expectedRound),
       this.db
-        .prepare("UPDATE events SET status = 'open', round = round + 1, final_counts = NULL, closed_at = NULL WHERE id = 1 AND round = ?")
+        .prepare("UPDATE events SET status = 'open', round = round + 1, revealed_questions = 0, final_counts = NULL, closed_at = NULL WHERE id = 1 AND round = ?")
         .bind(expectedRound),
     ]);
+    return this.getPublicEvent();
+  }
+
+  async reveal(questionId: number, expectedRound?: number): Promise<PublicEvent> {
+    if (!Number.isInteger(questionId) || questionId < 1 || questionId > questions.length)
+      throw new AppError(400, "공개할 문항을 확인해 주세요.");
+    const event = await this.event();
+    assertCurrentRound(event, expectedRound);
+    if (event.status === "draft")
+      throw new AppError(409, "행사를 시작한 뒤 점수를 공개해 주세요.");
+    // Bitwise OR keeps independent, concurrent reveals from overwriting each other.
+    await this.db
+      .prepare("UPDATE events SET revealed_questions = revealed_questions | ? WHERE id = 1 AND round = ? AND status <> 'draft'")
+      .bind(1 << (questionId - 1), event.round)
+      .run();
+    assertCurrentRound(await this.event(), event.round);
     return this.getPublicEvent();
   }
 
@@ -236,14 +258,18 @@ export class EventService {
       .all<AnswerRow>();
     const answers = rows.results.map((answer) => ({
       ...answer,
-      points: scoreOptions(counts[answer.questionId - 1])[answer.optionIndex],
+      points: isRevealed(event, answer.questionId)
+        ? scoreOptions(counts[answer.questionId - 1])[answer.optionIndex]
+        : null,
     }));
     return {
       displayName: participant.name,
       code: participant.id.slice(0, 8).toUpperCase(),
       answers,
       completed: answers.length === 10,
-      score: answers.reduce((sum, answer) => sum + answer.points, 0),
+      score: questions.every((question) => isRevealed(event, question.id))
+        ? answers.reduce((sum, answer) => sum + (answer.points ?? 0), 0)
+        : null,
       final: event.final_counts !== null,
     };
   }
@@ -273,11 +299,13 @@ export class EventService {
         .prepare(
           `INSERT INTO answers (participant_id,question_id,option_index,created_at)
         SELECT ?,?,?,? FROM events WHERE id = 1 AND status = 'open' AND round = ?
+        AND (? = 1 OR (revealed_questions & ?) <> 0)
         AND EXISTS (SELECT 1 FROM participants WHERE id = ?)
         AND (SELECT COUNT(*) FROM answers WHERE participant_id = ?) = ?
         ON CONFLICT (participant_id,question_id) DO NOTHING`,
         )
-        .bind(id, questionId, optionIndex, now, event.round, id, id, questionId - 1),
+        .bind(id, questionId, optionIndex, now, event.round, questionId,
+          questionId === 1 ? 0 : 1 << (questionId - 2), id, id, questionId - 1),
       this.db
         .prepare(
           `UPDATE participants SET completed_at = ? WHERE id = ? AND completed_at IS NULL
@@ -291,13 +319,18 @@ export class EventService {
       )
       .bind(id, questionId)
       .first<{ optionIndex: number }>();
-    if (!answer)
+    if (!answer) {
+      const current = await this.event();
+      assertCurrentRound(current, event.round);
       throw new AppError(
         409,
-        (await this.event()).status === "open"
-          ? "문항 순서대로 답변해 주세요."
-          : "참여가 마감되어 답변을 저장하지 못했습니다.",
+        current.status !== "open"
+          ? "참여가 마감되어 답변을 저장하지 못했습니다."
+          : questionId > 1 && !isRevealed(current, questionId - 1)
+            ? "운영자가 이전 문항의 점수를 공개하면 다음 문항에 답할 수 있습니다."
+            : "문항 순서대로 답변해 주세요.",
       );
+    }
     if (answer.optionIndex !== optionIndex)
       throw new AppError(409, "이미 제출한 답변은 변경할 수 없습니다.");
     return this.getDistribution(id, questionId);
@@ -320,6 +353,7 @@ export class EventService {
     const event = await this.event();
     const counts = (await this.counts(event))[questionId - 1];
     const total = counts.reduce((sum, count) => sum + count, 0);
+    const revealed = isRevealed(event, questionId);
     return {
       questionId,
       counts,
@@ -327,7 +361,8 @@ export class EventService {
       percentages: counts.map((count) =>
         total ? Math.round((count / total) * 1000) / 10 : 0,
       ),
-      points: scoreOptions(counts),
+      points: revealed ? scoreOptions(counts) : [],
+      revealed,
       selectedIndex: answer.optionIndex,
       final: event.final_counts !== null,
       updatedAt: event.closed_at ?? new Date().toISOString(),

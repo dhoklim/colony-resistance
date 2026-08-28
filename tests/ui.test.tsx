@@ -3,6 +3,7 @@ import { test } from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import Home from "../app/page.tsx";
+import { Completion } from "../app/components/completion.tsx";
 import { JSDOM } from "jsdom";
 import { createApiClient } from "../app/lib/client.ts";
 import type {
@@ -15,6 +16,33 @@ import type {
 test("the event introduction provides a participant entry link", () => {
   const html = renderToStaticMarkup(<Home />);
   assert.match(html, /<a[^>]+href="\/participate"[^>]*>/);
+});
+
+test("a completed participant sees only revealed answer points until all ten scores are public", () => {
+  const event: PublicEvent = {
+    status: "closed", round: 1, revealedQuestions: [1],
+    settings: { organizer: "", privacyContact: "", retentionDays: 0, instagramUrl: "" },
+    participantCount: 1, completedCount: 1, closedAt: "2026-08-28T00:00:00Z",
+    privacyVersion: 2, publicAdmin: true,
+  };
+  const participant: ParticipantSnapshot = {
+    displayName: "테스트", code: "TEST0001", completed: true, final: true, score: null,
+    answers: Array.from({ length: 10 }, (_, index) => ({
+      questionId: index + 1, optionIndex: 0, points: index === 0 ? 5 : null,
+    })),
+  };
+  const hidden = new JSDOM(renderToStaticMarkup(<Completion participant={participant} event={event} />));
+  assert.match(hidden.window.document.body.textContent ?? "", /총점 공개 대기 중/);
+  assert.equal(hidden.window.document.querySelector('[aria-label="군체 저항도"]') === null, true);
+  assert.equal(hidden.window.document.querySelectorAll(".review-row b").length, 1);
+  hidden.window.close();
+  participant.score = 50;
+  participant.answers.forEach((answer) => { answer.points = 5; });
+  event.revealedQuestions = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+  const shown = new JSDOM(renderToStaticMarkup(<Completion participant={participant} event={event} />));
+  assert.match(shown.window.document.querySelector('[aria-label="군체 저항도"]')?.textContent ?? "", /50.*50/);
+  assert.equal(shown.window.document.querySelectorAll(".review-row b").length, 10);
+  shown.window.close();
 });
 
 test("the Pages client persists an opaque session and sends it only to the configured API without cookies", async (t) => {
@@ -134,6 +162,7 @@ test("operators start without setup and close with a simple retryable confirmati
     event: {
       status: "draft",
       round: 1,
+      revealedQuestions: [],
       settings: {
         organizer: "",
         privacyContact: "",
@@ -167,6 +196,13 @@ test("operators start without setup and close with a simple retryable confirmati
             { error: "연결을 확인해 주세요." },
             { status: 500 },
           );
+        if (body.action === "reveal") {
+          current = {
+            ...current,
+            event: { ...current.event, revealedQuestions: [...current.event.revealedQuestions, body.questionId] },
+          };
+          return Response.json(current);
+        }
         current = {
           ...initial,
           event: {
@@ -192,6 +228,7 @@ test("operators start without setup and close with a simple retryable confirmati
   assert.equal(view.queryByLabelText("운영 주체"), null);
   assert.equal(view.queryByLabelText("개인정보 문의처"), null);
   const start = view.getByRole("button", { name: "이벤트 시작하기" });
+  assert.equal((view.getByRole("button", { name: "1번 문항 점수 공개" }) as HTMLButtonElement).disabled, true);
   assert.equal((start as HTMLButtonElement).disabled, false);
   fireEvent.click(start);
   await view.findByRole("button", { name: "응답 마감하기" });
@@ -223,6 +260,12 @@ test("operators start without setup and close with a simple retryable confirmati
   await view.findByText("기록을 초기화하고 행사를 다시 시작했습니다.");
   assert.deepEqual(requests[3], { action: "reset", round: 1 });
   assert.ok(view.getByRole("button", { name: "응답 마감하기" }));
+  const reveal = view.getByRole("button", { name: "1번 문항 점수 공개" });
+  fireEvent.click(reveal);
+  await view.findByText("1번 문항의 점수를 공개했습니다.");
+  assert.deepEqual(requests[4], { action: "reveal", questionId: 1, round: 2 });
+  assert.equal((reveal as HTMLButtonElement).disabled, true);
+  assert.equal((view.getByRole("button", { name: "2번 문항 점수 공개" }) as HTMLButtonElement).disabled, false);
 });
 
 test("a participant can recover a failed submission and complete all ten questions without seeing results early", async (t) => {
@@ -268,6 +311,7 @@ test("a participant can recover a failed submission and complete all ten questio
   const event: PublicEvent = {
     status: "open",
     round: 1,
+    revealedQuestions: [],
     settings: {
       organizer: "검증 학과",
       privacyContact: "test@example.invalid",
@@ -285,7 +329,7 @@ test("a participant can recover a failed submission and complete all ten questio
     code: "TEST0001",
     answers: [],
     completed: false,
-    score: 0,
+    score: null,
     final: false,
   };
   let registered = false;
@@ -329,7 +373,7 @@ test("a participant can recover a failed submission and complete all ten questio
           participant.answers.push({
             questionId: body.questionId,
             optionIndex: body.optionIndex,
-            points: 0,
+            points: null,
           });
           participant.completed = participant.answers.length === 10;
           distribution = {
@@ -337,7 +381,8 @@ test("a participant can recover a failed submission and complete all ten questio
             counts: [1, 0, 0, 0],
             total: 1,
             percentages: [100, 0, 0, 0],
-            points: [0, 5, 5, 5],
+            points: [],
+            revealed: false,
             selectedIndex: 0,
             final: false,
             updatedAt: new Date().toISOString(),
@@ -351,6 +396,21 @@ test("a participant can recover a failed submission and complete all ten questio
   const { default: Participation } =
     await import("../app/components/participation.tsx");
   const view = render(<Participation />);
+  async function revealQuestion(questionId: number) {
+    const waiting = await view.findByRole("button", { name: "점수 공개 대기 중" });
+    assert.equal((waiting as HTMLButtonElement).disabled, true);
+    assert.equal(view.container.querySelector(".earned-points strong") === null, true);
+    fireEvent.click(waiting);
+    assert.equal(view.queryByRole("button", { name: /이 선택으로 결정하기/ }) === null, true);
+    event.revealedQuestions.push(questionId);
+    distribution!.revealed = true;
+    distribution!.points = [0, 5, 5, 5];
+    participant.answers[questionId - 1].points = 0;
+    if (questionId === 10) participant.score = 0;
+    fireEvent(dom.window.document, new dom.window.Event("visibilitychange"));
+    const next = await view.findByRole("button", { name: questionId === 10 ? /나의 저항도 확인/ : /다음 상황으로/ });
+    assert.equal((next as HTMLButtonElement).disabled, false);
+  }
   fireEvent.change(await view.findByLabelText("닉네임"), {
     target: { value: "테스트" },
   });
@@ -366,6 +426,7 @@ test("a participant can recover a failed submission and complete all ten questio
   assert.equal((first as HTMLInputElement).checked, true);
   fireEvent.click(view.getByRole("button", { name: /이 선택으로 결정하기/ }));
   await view.findByLabelText("선택 비율 결과");
+  await revealQuestion(1);
   fireEvent.click(view.getByRole("button", { name: /다음 상황으로/ }));
   for (let question = 2; question <= 10; question++) {
     await waitFor(() => assert.equal(view.getAllByRole("radio").length, 4));
@@ -373,6 +434,7 @@ test("a participant can recover a failed submission and complete all ten questio
     fireEvent.click(view.getAllByRole("radio")[0]);
     fireEvent.click(view.getByRole("button", { name: /이 선택으로 결정하기/ }));
     await view.findByLabelText("선택 비율 결과");
+    await revealQuestion(question);
     fireEvent.click(
       view.getByRole("button", {
         name: question === 10 ? /나의 저항도 확인/ : /다음 상황으로/,
@@ -387,9 +449,9 @@ test("a participant can recover a failed submission and complete all ten questio
   fireEvent(dom.window.document, new dom.window.Event("visibilitychange"));
   await view.findByText("행사가 마감되어 최종 점수가 확정되었습니다.");
   for (const round of [2, 3]) {
-    Object.assign(event, { status: "open", round });
+    Object.assign(event, { status: "open", round, revealedQuestions: [] });
     registered = false;
-    Object.assign(participant, { answers: [], completed: false, final: false, score: 0 });
+    Object.assign(participant, { answers: [], completed: false, final: false, score: null });
     fireEvent(dom.window.document, new dom.window.Event("visibilitychange"));
     fireEvent.change(await view.findByLabelText("닉네임"), {
       target: { value: "테스트" },
@@ -401,13 +463,14 @@ test("a participant can recover a failed submission and complete all ten questio
   }
   // Another tab has already rejoined and answered when this tab notices the reset.
   Object.assign(event, { status: "open", round: 4 });
-  participant.answers = [{ questionId: 1, optionIndex: 1, points: 0 }];
+  participant.answers = [{ questionId: 1, optionIndex: 1, points: null }];
   distribution = {
     questionId: 1,
     counts: [0, 1, 0, 0],
     total: 1,
     percentages: [0, 100, 0, 0],
-    points: [5, 0, 5, 5],
+    points: [],
+    revealed: false,
     selectedIndex: 1,
     final: false,
     updatedAt: new Date().toISOString(),
@@ -420,6 +483,7 @@ test("a participant can recover a failed submission and complete all ten questio
     releaseSavedDistribution!();
   });
   await view.findByLabelText("선택 비율 결과");
+  assert.equal((view.getByRole("button", { name: "점수 공개 대기 중" }) as HTMLButtonElement).disabled, true);
   assert.equal(
     (view.getByRole("radio", { name: /일단 거리를 둔다/ }) as HTMLInputElement).checked,
     true,

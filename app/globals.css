@@ -2157,6 +2157,11 @@ p {
   font: 10px var(--font-sans);
   padding-left: 4px;
 }
+.earned-points > .score-pending {
+  border: 1px solid var(--line);
+  padding: 7px 9px;
+  font-size: 10px;
+}
 .result-disclaimer {
   font-size: 10px;
   color: var(--muted);
@@ -2285,6 +2290,74 @@ p {
   font-size: 10px;
   color: var(--muted);
   margin-top: 5px;
+}
+.score-waiting {
+  margin: 28px 0;
+  padding: 30px 20px;
+  border: 1px solid var(--line);
+  background: #101c16;
+  color: #c4d3bb;
+}
+.score-waiting svg {
+  margin: 0 auto 14px;
+  color: var(--green);
+}
+.score-waiting h2 {
+  font-size: 21px;
+  margin-bottom: 13px;
+}
+.score-waiting p {
+  font-size: 11px;
+  line-height: 1.9;
+  color: var(--muted);
+}
+.reveal-panel {
+  margin-bottom: 24px;
+}
+.question-reveal-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 20px;
+}
+.reveal-question {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  min-height: 100px;
+  padding: 15px;
+  border: 1px solid #426434;
+  background: #111c15;
+  color: #d6e8c9;
+  cursor: pointer;
+}
+.reveal-question > span,
+.reveal-question > small {
+  font-size: 10px;
+  color: var(--muted);
+}
+.reveal-question > strong {
+  font-size: 14px;
+}
+.reveal-question:hover:not(:disabled) {
+  background: #1d3020;
+  border-color: var(--green);
+}
+.reveal-question:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.reveal-question.is-revealed {
+  opacity: 1;
+  border-color: var(--line);
+  background: #0d1711;
+  color: var(--green);
+}
+@media (max-width: 600px) {
+  .question-reveal-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 .participant-code {
   display: flex;
