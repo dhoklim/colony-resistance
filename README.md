@@ -3,7 +3,7 @@
 사용자가 제공한 10개의 생존 상황으로 진행하는 일회용 행사 웹앱입니다. 닉네임 하나로 참여하고, 선택 비율과 군체 저항도를 확인합니다.
 
 - [참여 사이트](https://dhoklim.github.io/colony-resistance/)
-- [운영실](https://colony-resistance.dhoklim.chatgpt.site/admin)
+- [운영실](https://dhoklim.github.io/colony-resistance/#/admin)
 
 ## 행사 운영 순서
 
@@ -93,10 +93,11 @@ DELETE FROM rate_limits;
 ## GitHub Pages 배포
 
 - 참여 사이트: https://dhoklim.github.io/colony-resistance/
-- 서버·운영실: https://colony-resistance.dhoklim.chatgpt.site/admin
+- 운영실: https://dhoklim.github.io/colony-resistance/#/admin
+- 기존 서버 운영실도 유지: https://colony-resistance.dhoklim.chatgpt.site/admin
 - 소스 저장소: https://github.com/dhoklim/colony-resistance
 
-`github-pages/`는 기존 소개·참여 컴포넌트를 재사용하는 정적 진입점입니다. 해시 경로 `#/participate`로 이동하므로 직접 링크와 새로고침도 동작합니다. 페이지 리디렉션이나 iframe 대체물이 아니며, 참여 화면은 GitHub Pages에서 실행됩니다.
+`github-pages/`는 기존 소개·참여·운영 컴포넌트를 재사용하는 정적 진입점입니다. 해시 경로 `#/participate`와 `#/admin`으로 이동하므로 직접 링크와 새로고침도 동작합니다. 페이지 리디렉션이나 iframe 대체물이 아니며, 참가 화면과 운영실 모두 GitHub Pages에서 실행됩니다. 운영실은 기존 서버 API에서 실제 현황을 불러온 뒤 표시하고, 진행 버튼도 같은 서버에 반영합니다. QR은 GitHub 참가 주소를 가리키며 CSV 링크는 실제 서버의 다운로드 주소를 사용합니다.
 
 `npm run build:pages`로 `dist-pages/`를 만듭니다. main 브랜치에 푸시하면 `.github/workflows/pages.yml`이 빌드한 정적 파일만 GitHub Pages에 배포합니다. DB와 서버 코드는 정적 배포물에 포함하지 않습니다. 서버 변경은 기존 Sites 빌드·배포 절차가 별도로 필요합니다.
 
@@ -106,4 +107,4 @@ DELETE FROM rate_limits;
 - `PARTICIPATION_URL=https://dhoklim.github.io/colony-resistance/#/participate`: 운영실에서 만드는 행사 QR의 주소.
 - `SITE_URL`: 기존 서버의 정확한 HTTPS 주소를 유지합니다.
 
-Pages 출처의 CORS 요청은 참가용 API에만 허용합니다. 관리자 화면은 기존 서버 주소에서 열며, 공개 운영 모드에서는 관리자 API도 로그인을 요구하지 않습니다. 공개 여부는 서버 설정으로만 결정하며 브라우저 요청으로 변경할 수 없습니다. Pages가 저장하는 참가 토큰은 본인 답변 제출 권한이 있으므로 URL·로그·공유 메시지에 넣지 마세요. GitHub Pages의 같은 계정 내 다른 프로젝트도 동일한 브라우저 출처를 공유하므로, 신뢰할 수 없는 스크립트를 해당 계정의 Pages에 게시하지 마세요.
+설정된 Pages 출처의 CORS 요청은 참가용 API에 허용하고, `PUBLIC_ADMIN_ACCESS=true`일 때만 운영실·CSV API와 운영 명령에도 허용합니다. 운영실은 로그인·참가 등록·브라우저 저장소 없이 이용할 수 있습니다. 비공개 운영 모드에서는 Pages의 운영 명령을 거절하며 기존 서버 운영실의 계정 검증을 유지합니다. 공개 여부는 서버 설정으로만 결정하며 브라우저 요청으로 변경할 수 없습니다. Pages가 저장하는 참가 토큰은 본인 답변 제출 권한이 있으므로 URL·로그·공유 메시지에 넣지 마세요. GitHub Pages의 같은 계정 내 다른 프로젝트도 동일한 브라우저 출처를 공유하므로, 신뢰할 수 없는 스크립트를 해당 계정의 Pages에 게시하지 마세요.

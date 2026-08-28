@@ -39,7 +39,7 @@ export class EventApi {
 
   async handle(route: ApiRoute, request: Request): Promise<Response> {
     const publicRoute =
-      route === "event" || route === "participant" || route === "answer";
+      route === "event" || route === "participant" || route === "answer" || this.service.publicAdmin;
     const pagesRequest = publicRoute && this.isPagesRequest(request);
     let response: Response;
     if (request.method === "OPTIONS") {
@@ -86,7 +86,7 @@ export class EventApi {
         assertSameOrigin(
           request,
           this.options.canonicalOrigin,
-          route === "participant" || route === "answer"
+          route === "participant" || route === "answer" || this.service.publicAdmin
             ? this.options.participantOrigin
             : undefined,
         );

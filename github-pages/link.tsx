@@ -10,12 +10,9 @@ export default function PagesLink({
   prefetch?: boolean;
 }) {
   void prefetch;
-  const apiOrigin = import.meta.env.VITE_PUBLIC_API_ORIGIN;
   const target =
-    href === "/admin"
-      ? `${apiOrigin}/admin`
-      : href.startsWith("/")
-        ? `${import.meta.env.BASE_URL}#${href}`
-        : href;
+    href.startsWith("/")
+      ? `${import.meta.env?.BASE_URL ?? "/"}#${href}`
+      : href;
   return <a {...props} href={target} />;
 }

@@ -38,7 +38,7 @@ const request = (
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
-test("a public one-use event needs only nicknames and start, close and draw actions", async (t) => {
+test("a public event can run entirely from GitHub Pages without operator login", async (t) => {
   t.after(async () => {
     await database.db.batch(
       [
@@ -50,21 +50,34 @@ test("a public one-use event needs only nicknames and start, close and draw acti
       ].map((sql) => database.db.prepare(sql)),
     );
   });
+  const pagesOrigin = "https://dhoklim.github.io";
+  const adminRequest = (path: string, body?: unknown, headers: Record<string, string> = {}) =>
+    request(path, body, { origin: pagesOrigin, "sec-fetch-site": "cross-site", ...headers });
   const publicService = new EventService(database.db, true);
   const publicApi = new EventApi(publicService, {
     canonicalOrigin: origin,
+    participantOrigin: pagesOrigin,
     adminEmails: [],
     getUser: async () => null,
   });
-  const snapshot = await publicApi.handle("admin", request("/api/admin"));
+  const snapshot = await publicApi.handle("admin", adminRequest("/api/admin"));
   assert.equal(snapshot.status, 200);
+  assert.equal(snapshot.headers.get("access-control-allow-origin"), pagesOrigin);
+  for (const route of ["admin", "export"] as const) {
+    const preflight = await publicApi.handle(route, new Request(origin + "/api/admin", {
+      method: "OPTIONS", headers: { origin: pagesOrigin, "access-control-request-method": "POST" },
+    }));
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers.get("access-control-allow-origin"), pagesOrigin);
+    assert.equal(preflight.headers.get("access-control-allow-credentials"), null);
+  }
   assert.equal(
     ((await snapshot.json()) as AdminSnapshot).event.publicAdmin,
     true,
   );
   const untrusted = await publicApi.handle(
     "admin",
-    request(
+    adminRequest(
       "/api/admin",
       { action: "start" },
       { origin: "https://untrusted.example" },
@@ -74,7 +87,7 @@ test("a public one-use event needs only nicknames and start, close and draw acti
   assert.equal((await publicService.getPublicEvent()).status, "draft");
   const started = await publicApi.handle(
     "admin",
-    request("/api/admin", { action: "start" }),
+    adminRequest("/api/admin", { action: "start" }),
   );
   assert.equal(started.status, 200);
   const initial = await publicApi.handle(
@@ -96,18 +109,19 @@ test("a public one-use event needs only nicknames and start, close and draw acti
   };
   assert.equal(participant.displayName, "생존자");
   assert.match(participant.code, /^[A-F0-9]{8}$/);
-  const csv = await publicApi.handle("export", request("/api/admin/export"));
+  const csv = await publicApi.handle("export", adminRequest("/api/admin/export"));
   assert.equal(csv.status, 200);
+  assert.equal(csv.headers.get("access-control-allow-origin"), pagesOrigin);
   const exported = await csv.text();
   assert.ok(exported.includes(`"${participant.code}","생존자"`));
   assert.equal(exported.includes("학번"), false);
-  await publicApi.handle("admin", request("/api/admin?action=close"));
+  await publicApi.handle("admin", adminRequest("/api/admin?action=close"));
   assert.equal((await publicService.getPublicEvent()).status, "open");
   const lobbyAnswer = await publicApi.handle("answer",
     request("/api/answer", { questionId: 1, optionIndex: 0 }, { cookie }));
   assert.equal(lobbyAnswer.status, 409);
   for (let questionId = 1; questionId <= 10; questionId++) {
-    const opened = await publicApi.handle("admin", request("/api/admin", {
+    const opened = await publicApi.handle("admin", adminRequest("/api/admin", {
       action: "advance", step: questionId * 2 - 2, round: 1,
     }));
     assert.equal(opened.status, 200);
@@ -129,12 +143,12 @@ test("a public one-use event needs only nicknames and start, close and draw acti
     const polled = ((await poll.json()) as { distribution: Distribution }).distribution;
     assert.deepEqual(polled.counts, []);
     assert.deepEqual(polled.percentages, []);
-    const adminRead = await publicApi.handle("admin", request("/api/admin"));
+    const adminRead = await publicApi.handle("admin", adminRequest("/api/admin"));
     const hiddenAdmin = (await adminRead.json()) as AdminSnapshot;
     assert.deepEqual(hiddenAdmin.distributions[questionId - 1].counts, []);
     assert.deepEqual(hiddenAdmin.distributions[questionId - 1].points, []);
     assert.equal(hiddenAdmin.participants[0].score, null);
-    const hiddenCsv = await publicApi.handle("export", request("/api/admin/export"));
+    const hiddenCsv = await publicApi.handle("export", adminRequest("/api/admin/export"));
     assert.match(await hiddenCsv.text(), /"공개 대기","미공개"/);
     if (questionId < 10) {
       const tooEarly = await publicApi.handle(
@@ -144,17 +158,17 @@ test("a public one-use event needs only nicknames and start, close and draw acti
       assert.equal(tooEarly.status, 409);
     }
     if (questionId === 1) {
-      await publicApi.handle("admin", request("/api/admin?action=reveal&questionId=1"));
+      await publicApi.handle("admin", adminRequest("/api/admin?action=reveal&questionId=1"));
       assert.deepEqual((await publicService.getPublicEvent()).revealedQuestions, []);
       const invalidReveal = await publicApi.handle(
         "admin",
-        request("/api/admin", { action: "reveal", questionId: "1", round: 1 }),
+        adminRequest("/api/admin", { action: "reveal", questionId: "1", round: 1 }),
       );
       assert.equal(invalidReveal.status, 400);
     }
     const revealed = await publicApi.handle(
       "admin",
-      request("/api/admin", { action: "advance", step: questionId * 2 - 1, round: 1 }),
+      adminRequest("/api/admin", { action: "advance", step: questionId * 2 - 1, round: 1 }),
     );
     assert.equal(revealed.status, 200);
     const visible = await publicApi.handle(
@@ -170,12 +184,12 @@ test("a public one-use event needs only nicknames and start, close and draw acti
   assert.equal(((await completed.json()) as { participant: ParticipantSnapshot }).participant.score, 0);
   const closed = await publicApi.handle(
     "admin",
-    request("/api/admin", { action: "close" }),
+    adminRequest("/api/admin", { action: "close" }),
   );
   assert.equal(closed.status, 200);
   const draw = await publicApi.handle(
     "admin",
-    request("/api/admin", { action: "draw" }),
+    adminRequest("/api/admin", { action: "draw" }),
   );
   assert.equal(draw.status, 200);
   const result = (await draw.json()) as AdminSnapshot;
@@ -184,16 +198,16 @@ test("a public one-use event needs only nicknames and start, close and draw acti
   assert.equal(result.draw?.winners[0].code, participant.code);
   assert.equal(Object.hasOwn(result.draw!.winners[0], "studentId"), false);
   assert.equal(Object.hasOwn(result.participants[0], "studentId"), false);
-  await publicApi.handle("admin", request("/api/admin?action=reset"));
+  await publicApi.handle("admin", adminRequest("/api/admin?action=reset"));
   assert.equal((await publicService.getPublicEvent()).status, "drawn");
   const invalidReset = await publicApi.handle(
     "admin",
-    request("/api/admin", { action: "reset" }),
+    adminRequest("/api/admin", { action: "reset" }),
   );
   assert.equal(invalidReset.status, 400);
   const reset = await publicApi.handle(
     "admin",
-    request("/api/admin", { action: "reset", round: 1 }),
+    adminRequest("/api/admin", { action: "reset", round: 1 }),
   );
   assert.equal(reset.status, 200);
   const nextRound = (await reset.json()) as AdminSnapshot;
@@ -240,7 +254,7 @@ test("a public one-use event needs only nicknames and start, close and draw acti
     ((await untouched.json()) as { participant: ParticipantSnapshot }).participant.answers,
     [],
   );
-  await publicApi.handle("admin", request("/api/admin", { action: "advance", step: 0, round: 2 }));
+  await publicApi.handle("admin", adminRequest("/api/admin", { action: "advance", step: 0, round: 2 }));
   const newAnswer = await publicApi.handle(
     "answer",
     request("/api/answer", { questionId: 1, optionIndex: 1, round: 2 }, { cookie }),
@@ -252,18 +266,18 @@ test("a public one-use event needs only nicknames and start, close and draw acti
   );
   const staleClose = await publicApi.handle(
     "admin",
-    request("/api/admin", { action: "close", round: 1 }),
+    adminRequest("/api/admin", { action: "close", round: 1 }),
   );
   assert.equal(staleClose.status, 409);
   const staleReveal = await publicApi.handle(
     "admin",
-    request("/api/admin", { action: "reveal", questionId: 1, round: 1 }),
+    adminRequest("/api/admin", { action: "reveal", questionId: 1, round: 1 }),
   );
   assert.equal(staleReveal.status, 409);
   assert.equal((await publicService.getPublicEvent()).status, "open");
   const newClose = await publicApi.handle(
     "admin",
-    request("/api/admin", { action: "close", round: 2 }),
+    adminRequest("/api/admin", { action: "close", round: 2 }),
   );
   assert.equal(newClose.status, 200);
   assert.equal((await publicService.getPublicEvent()).status, "closed");

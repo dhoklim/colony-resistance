@@ -18,7 +18,8 @@ export function createApiClient(
     try {
       if (!path.startsWith("/api/") || path.startsWith("//"))
         throw new Error("올바르지 않은 API 경로입니다.");
-      const browserStorage = origin
+      const participantRoute = /^\/api\/(participant|answer)(?:\?|$)/.test(path);
+      const browserStorage = origin && participantRoute
         ? (storage ?? window.localStorage)
         : undefined;
       const headers = new Headers(
@@ -77,9 +78,8 @@ export function createApiClient(
   };
 }
 
-export const apiJson = createApiClient(
-  import.meta.env?.VITE_PUBLIC_API_ORIGIN ?? "",
-);
+export const apiOrigin = import.meta.env?.VITE_PUBLIC_API_ORIGIN ?? "";
+export const apiJson = createApiClient(apiOrigin);
 
 export function friendlyError(error: unknown): string {
   if (error instanceof Error && error.name === "AbortError")

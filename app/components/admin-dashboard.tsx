@@ -33,10 +33,12 @@ export default function AdminDashboard({
   initial,
   email,
   participationUrl,
+  exportUrl = "/api/admin/export",
 }: {
   initial: AdminSnapshot;
   email?: string;
   participationUrl?: string;
+  exportUrl?: string;
 }) {
   const [data, setData] = useState(initial);
   const [pending, setPending] = useState(false);
@@ -360,7 +362,7 @@ export default function AdminDashboard({
               >
                 <div className="section-heading">
                   <h2 id="participants-title">참가 현황</h2>
-                  <a href="/api/admin/export" className="small-link">
+                  <a href={exportUrl} className="small-link">
                     <Download size={14} aria-hidden="true" /> CSV 내려받기
                   </a>
                 </div>

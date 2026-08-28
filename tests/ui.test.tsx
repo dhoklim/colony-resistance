@@ -58,8 +58,9 @@ test("the public operator page also hides unreleased distributions and totals", 
       answeredCount: 1, score: 5, registeredAt: "2026-08-28T00:00:00Z" }],
     page: 1, pageSize: 50, totalPages: 1, draw: null,
   };
-  const render = () => new JSDOM(renderToStaticMarkup(<AdminDashboard initial={initial} />));
+  const render = () => new JSDOM(renderToStaticMarkup(<AdminDashboard initial={initial} exportUrl="https://event.example/api/admin/export" />));
   const hidden = render();
+  assert.equal(hidden.window.document.querySelector('a[href="https://event.example/api/admin/export"]')?.textContent?.includes("CSV"), true);
   assert.equal(hidden.window.document.querySelector(".aggregate-bar, .aggregate-label b"), null);
   assert.match(hidden.window.document.querySelector(".table-score")?.textContent ?? "", /공개 대기/);
   assert.match(hidden.window.document.querySelector(".aggregate-question")?.textContent ?? "", /10명 응답/);
@@ -174,6 +175,86 @@ test("a delayed bootstrap in another tab preserves and resumes the registered se
   assert.deepEqual(await delayedBootstrap, { participant });
   assert.equal(values.get("colony-session:https://event.example"), firstToken);
   assert.deepEqual(await firstTab("/api/participant"), { participant });
+});
+
+test("the public Pages operator client does not depend on participant storage or credentials", async (t) => {
+  const calls: { url: string; init?: RequestInit }[] = [];
+  t.mock.method(globalThis, "fetch", async (url: unknown, init?: RequestInit) => {
+    calls.push({ url: String(url), init });
+    return Response.json({ ok: true });
+  });
+  const client = createApiClient("https://event.example", {
+    getItem() { throw new Error("participant storage is blocked"); },
+    setItem() { throw new Error("participant storage is blocked"); },
+  });
+  await client("/api/admin?page=1");
+  await client("/api/admin", { action: "advance", step: 0, round: 1 });
+  assert.equal(calls.length, 2);
+  for (const call of calls) {
+    assert.ok(call.url.startsWith("https://event.example/api/admin"));
+    assert.equal(call.init?.credentials, "omit");
+    assert.equal(new Headers(call.init?.headers).get("authorization"), null);
+  }
+});
+
+test("the GitHub admin hash route loads, retries, controls the event and survives a refresh", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "https://dhoklim.github.io/colony-resistance/#/admin", pretendToBeVisual: true,
+  });
+  const properties: Record<string, unknown> = {
+    window: dom.window, self: dom.window, document: dom.window.document,
+    navigator: dom.window.navigator, HTMLElement: dom.window.HTMLElement, Node: dom.window.Node,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  };
+  const originals = Object.fromEntries(Object.keys(properties).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  for (const [key, value] of Object.entries(properties))
+    Object.defineProperty(globalThis, key, { value, configurable: true, writable: true });
+  dom.window.scrollTo = () => {};
+  const { render, fireEvent, waitFor, cleanup, act } = await import("@testing-library/react");
+  t.after(async () => {
+    await act(async () => { cleanup(); });
+    dom.window.close();
+    for (const key of Object.keys(properties)) {
+      if (originals[key]) Object.defineProperty(globalThis, key, originals[key]!);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  });
+  const snapshot: AdminSnapshot = {
+    event: { status: "open", round: 7, progressStep: 0, revealedQuestions: [], publicAdmin: true,
+      settings: { organizer: "", privacyContact: "", retentionDays: 0, instagramUrl: "" },
+      participantCount: 0, completedCount: 0, closedAt: null, privacyVersion: 2 },
+    distributions: [], participants: [], page: 1, pageSize: 50, totalPages: 1, draw: null,
+  };
+  let failed = false;
+  t.mock.method(globalThis, "fetch", async (url: unknown, init?: RequestInit) => {
+    assert.ok(String(url).startsWith("/api/admin"));
+    if (!failed) {
+      failed = true;
+      return Response.json({ error: "잠시 후 다시 연결해 주세요." }, { status: 503 });
+    }
+    if (init?.method === "POST") {
+      assert.deepEqual(JSON.parse(String(init.body)), { action: "advance", step: 0, round: 7 });
+      snapshot.event.progressStep = 1;
+    }
+    return Response.json(snapshot);
+  });
+  const { default: PagesApp } = await import("../github-pages/app.tsx");
+  const { default: PagesLink } = await import("../github-pages/link.tsx");
+  const link = new JSDOM(renderToStaticMarkup(<PagesLink href="/admin">운영자</PagesLink>));
+  assert.match(link.window.document.querySelector("a")!.getAttribute("href")!, /#\/admin$/);
+  link.window.close();
+  let view = render(<PagesApp />);
+  await view.findByText("잠시 후 다시 연결해 주세요.");
+  fireEvent.click(view.getByRole("button", { name: "다시 연결하기" }));
+  await view.findByRole("heading", { name: "이벤트 운영실." });
+  await waitFor(() => assert.equal(dom.window.document.title, "이벤트 운영실 | 군체 저항도"));
+  await waitFor(() => assert.equal((view.getByLabelText("참여 주소") as HTMLInputElement).value,
+    "https://dhoklim.github.io/colony-resistance/#/participate"));
+  fireEvent.click(view.getByRole("button", { name: "1번 문제 공개" }));
+  await view.findByRole("button", { name: "1번 결과 공개" });
+  view.unmount();
+  view = render(<PagesApp />);
+  await view.findByRole("button", { name: "1번 결과 공개" });
 });
 
 test("operators start without setup and close with a simple retryable confirmation", async (t) => {
