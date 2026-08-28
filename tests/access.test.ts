@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
+import { runInNewContext } from "node:vm";
+import ts from "typescript";
 import { EventApi } from "../app/server/api.ts";
 import { EventService } from "../app/server/service.ts";
 import { createTestDatabase } from "./helpers/d1.ts";
@@ -37,6 +40,44 @@ const request = (
     headers: { origin, "content-type": "application/json", ...headers },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+
+test("HTTP operator route exports handle Pages preflight in public mode only", async () => {
+  const pagesOrigin = "https://dhoklim.github.io";
+  for (const path of ["admin", "admin/export"]) {
+    const source = await readFile(new URL(`../app/api/${path}/route.ts`, import.meta.url), "utf8");
+    const compiled = ts.transpileModule(source, {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    for (const publicAdmin of [true, false]) {
+      const handler = new EventApi(new EventService(database.db, publicAdmin), {
+        canonicalOrigin: origin, participantOrigin: pagesOrigin, adminEmails: [],
+        getUser: async () => { throw new Error("Preflight must not load an identity."); },
+      });
+      const route: { OPTIONS?: (request: Request) => Promise<Response> } = {};
+      // Execute the actual route exports while substituting only the Workers binding factory.
+      runInNewContext(compiled, {
+        exports: route,
+        require: (specifier: string) => {
+          assert.match(specifier, /\/server\/context$/);
+          return { createApi: () => handler };
+        },
+      });
+      assert.equal(typeof route.OPTIONS, "function", `${path} must forward OPTIONS to the event API`);
+      for (const requestOrigin of [pagesOrigin, "https://untrusted.example"]) {
+        const allowed = publicAdmin && requestOrigin === pagesOrigin;
+        const response = await route.OPTIONS!(new Request(`${origin}/api/${path}`, {
+          method: "OPTIONS", headers: {
+            origin: requestOrigin, "access-control-request-method": "POST",
+            "access-control-request-headers": "content-type",
+          },
+        }));
+        assert.equal(response.status, allowed ? 204 : 403);
+        assert.equal(response.headers.get("access-control-allow-origin"), allowed ? pagesOrigin : null);
+        assert.equal(response.headers.get("access-control-allow-credentials"), null);
+      }
+    }
+  }
+});
 
 test("a public event can run entirely from GitHub Pages without operator login", async (t) => {
   t.after(async () => {
