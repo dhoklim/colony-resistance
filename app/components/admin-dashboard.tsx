@@ -21,6 +21,7 @@ import AdminConfirmation, {
   type AdminAction,
 } from "./admin-confirmation";
 import EventQr from "./event-qr";
+import AdminQuestionScreen from "./admin-question-screen";
 
 const statusCopy: Record<EventStatus, string> = {
   draft: "시작 대기",
@@ -195,6 +196,40 @@ export default function AdminDashboard({
               {syncError}
             </div>
           )}
+          <section className="panel reveal-panel screen-panel" aria-labelledby="reveal-title">
+            <div className="section-heading">
+              <h2 id="reveal-title">문제 진행</h2>
+              <span className="badge">{event.revealedQuestions.length} / 10 공개</span>
+            </div>
+            <p className="small-note">
+              버튼 하나로 문제 공개 → 결과 공개 → 다음 문제 공개 순서로 진행합니다. 참가자 화면은 자동으로 넘어갑니다.
+            </p>
+            <AdminQuestionScreen event={event} distributions={data.distributions} />
+            <div className="question-control">
+              <div aria-live="polite">
+                <strong>{progressDone ? "10개 문제의 결과를 모두 공개했습니다."
+                  : event.status === "closed" ? `${controlQuestion}번 문제 · 응답 마감`
+                  : step === 0 ? "참가자가 입장 후 대기하고 있습니다."
+                    : step % 2 === 1 ? `${currentQuestion}번 문제 · 답변 받는 중`
+                      : `${currentQuestion}번 결과 공개 완료 · 다음 문제 대기`}</strong>
+                <p>{step === 0 ? `${event.participantCount}명 입장`
+                  : `${responseCount} / ${event.participantCount}명 응답`}</p>
+              </div>
+              <button type="button" className="button button-primary" disabled={advanceDisabled}
+                onClick={() => void mutate({ action: "advance", step, round: event.round })}>
+                {progressDone ? "모든 문제 진행 완료" : `${nextQuestion}번 ${releasingResult ? "결과" : "문제"} 공개`}
+                <ArrowRight size={18} aria-hidden="true" />
+              </button>
+            </div>
+            <p className="small-note">
+              {event.status === "closed" && !progressDone
+                ? "응답 마감 후에는 남은 문항의 결과만 차례로 공개합니다. 새 답변은 받지 않습니다."
+                : releasingResult
+                ? "응답 수를 확인한 뒤 결과를 공개하세요. 공개 즉시 이 문항의 답변이 마감되며 선택 비율과 점수가 표시됩니다."
+                : progressDone ? "응답 마감 후 당첨자를 선정할 수 있습니다."
+                  : "아직 열리지 않은 문제는 참가자에게 보이지 않습니다. 다음 문제를 열기 전까지 대기 화면이나 직전 결과가 유지됩니다."}
+            </p>
+          </section>
           <section className="admin-stats" aria-label="이벤트 현황">
             <div>
               <span>
@@ -321,39 +356,6 @@ export default function AdminDashboard({
               </p>
             </section>
           )}
-          <section className="panel reveal-panel" aria-labelledby="reveal-title">
-            <div className="section-heading">
-              <h2 id="reveal-title">문제 진행</h2>
-              <span className="badge">{event.revealedQuestions.length} / 10 공개</span>
-            </div>
-            <p className="small-note">
-              버튼 하나로 문제 공개 → 결과 공개 → 다음 문제 공개 순서로 진행합니다. 참가자 화면은 자동으로 넘어갑니다.
-            </p>
-            <div className="question-control">
-              <div aria-live="polite">
-                <strong>{progressDone ? "10개 문제의 결과를 모두 공개했습니다."
-                  : event.status === "closed" ? `${controlQuestion}번 문제 · 응답 마감`
-                  : step === 0 ? "참가자가 입장 후 대기하고 있습니다."
-                    : step % 2 === 1 ? `${currentQuestion}번 문제 · 답변 받는 중`
-                      : `${currentQuestion}번 결과 공개 완료 · 다음 문제 대기`}</strong>
-                <p>{step === 0 ? `${event.participantCount}명 입장`
-                  : `${responseCount} / ${event.participantCount}명 응답`}</p>
-              </div>
-              <button type="button" className="button button-primary" disabled={advanceDisabled}
-                onClick={() => void mutate({ action: "advance", step, round: event.round })}>
-                {progressDone ? "모든 문제 진행 완료" : `${nextQuestion}번 ${releasingResult ? "결과" : "문제"} 공개`}
-                <ArrowRight size={18} aria-hidden="true" />
-              </button>
-            </div>
-            <p className="small-note">
-              {event.status === "closed" && !progressDone
-                ? "응답 마감 후에는 남은 문항의 결과만 차례로 공개합니다. 새 답변은 받지 않습니다."
-                : releasingResult
-                ? "응답 수를 확인한 뒤 결과를 공개하세요. 공개 즉시 이 문항의 답변이 마감되며 선택 비율과 점수가 표시됩니다."
-                : progressDone ? "응답 마감 후 당첨자를 선정할 수 있습니다."
-                  : "아직 열리지 않은 문제는 참가자에게 보이지 않습니다. 다음 문제를 열기 전까지 대기 화면이나 직전 결과가 유지됩니다."}
-            </p>
-          </section>
           <div className="admin-grid">
             <div className="admin-primary">
               <section

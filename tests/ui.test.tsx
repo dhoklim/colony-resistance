@@ -76,6 +76,80 @@ test("the public operator page also hides unreleased distributions and totals", 
   complete.window.close();
 });
 
+test("the operator screen follows the published question, including the lobby and final result", () => {
+  const initial: AdminSnapshot = {
+    event: { status: "open", round: 1, progressStep: 0, revealedQuestions: [], publicAdmin: true,
+      settings: { organizer: "", privacyContact: "", retentionDays: 0, instagramUrl: "" },
+      participantCount: 10, completedCount: 0, closedAt: null, privacyVersion: 2 },
+    distributions: questions.map((question) => ({ questionId: question.id, total: 10,
+      counts: [1, 2, 3, 4], points: [5, 3, 1, 0] })),
+    participants: [], page: 1, pageSize: 50, totalPages: 1, draw: null,
+  };
+  for (const [step, questionId] of [[0, null], [1, 1], [2, 1], [3, 2], [17, 9], [19, 10], [20, 10]] as const) {
+    initial.event.progressStep = step;
+    const dom = new JSDOM(renderToStaticMarkup(<AdminDashboard initial={initial} />));
+    try {
+      const screen = dom.window.document.querySelector('[aria-label="스크린 문제"]');
+      assert.ok(screen, "The operator dashboard needs a screen-facing question area.");
+      assert.equal(screen.querySelectorAll("button, input").length, 0, "Answers are still submitted on phones.");
+      if (questionId === null) {
+        assert.equal(screen.querySelectorAll(".screen-option").length, 0);
+        for (const question of questions) assert.equal(screen.textContent?.includes(question.prompt), false);
+      } else {
+        assert.equal(screen.querySelector("h2")?.textContent, questions[questionId - 1].prompt);
+        assert.deepEqual(Array.from(screen.querySelectorAll(".screen-option-text"), (item) => item.textContent),
+          [...questions[questionId - 1].options]);
+      }
+      const main = dom.window.document.querySelector("main")!;
+      assert.ok(Array.from(main.children).indexOf(screen.closest(".reveal-panel")!) <
+        Array.from(main.children).indexOf(main.querySelector(".admin-stats")!));
+    } finally {
+      dom.window.close();
+    }
+  }
+});
+
+test("the operator screen shows percentages and points only for an explicitly released current result", () => {
+  const initial: AdminSnapshot = {
+    event: { status: "open", round: 1, progressStep: 1, revealedQuestions: [], publicAdmin: true,
+      settings: { organizer: "", privacyContact: "", retentionDays: 0, instagramUrl: "" },
+      participantCount: 10, completedCount: 0, closedAt: null, privacyVersion: 2 },
+    distributions: [{ questionId: 1, counts: [1, 2, 3, 4], total: 10, points: [5, 3, 1, 0] },
+      { questionId: 2, counts: [4, 3, 2, 1], total: 10, points: [0, 1, 3, 5] }],
+    participants: [], page: 1, pageSize: 50, totalPages: 1, draw: null,
+  };
+  for (const state of [
+    { step: 1, revealed: [], ratios: [], points: [] },
+    { step: 1, revealed: [1], ratios: [], points: [] },
+    { step: 2, revealed: [], ratios: [], points: [] },
+    { step: 2, revealed: [1], ratios: ["10%", "20%", "30%", "40%"], points: ["5", "3", "1", "0"] },
+    { step: 3, revealed: [1], ratios: [], points: [] },
+    { step: 4, revealed: [1, 2], ratios: ["40%", "30%", "20%", "10%"], points: ["0", "1", "3", "5"] },
+  ]) {
+    initial.event.progressStep = state.step;
+    initial.event.revealedQuestions = state.revealed;
+    const dom = new JSDOM(renderToStaticMarkup(<AdminDashboard initial={initial} />));
+    try {
+      const screen = dom.window.document.querySelector('[aria-label="스크린 문제"]');
+      assert.ok(screen);
+      assert.deepEqual(Array.from(screen.querySelectorAll(".screen-option-percentage"), (item) => item.textContent), state.ratios);
+      assert.deepEqual(Array.from(screen.querySelectorAll(".screen-option-points b"), (item) => item.textContent), state.points);
+      assert.equal(screen.querySelectorAll(".screen-option-fill").length, state.ratios.length);
+    } finally {
+      dom.window.close();
+    }
+  }
+  initial.event.status = "closed";
+  initial.event.progressStep = 2;
+  initial.event.revealedQuestions = [1];
+  initial.distributions[0] = { questionId: 1, total: 0, counts: [0, 0, 0, 0], points: [5, 5, 5, 5] };
+  const empty = new JSDOM(renderToStaticMarkup(<AdminDashboard initial={initial} />));
+  const screen = empty.window.document.querySelector('[aria-label="스크린 문제"]')!;
+  assert.deepEqual(Array.from(screen.querySelectorAll(".screen-option-percentage"), (item) => item.textContent), ["0%", "0%", "0%", "0%"]);
+  assert.equal(screen.querySelectorAll(".screen-option-points").length, 0);
+  empty.window.close();
+});
+
 test("a completed participant sees only revealed answer points until all ten scores are public", () => {
   const event: PublicEvent = {
     status: "closed", round: 1, progressStep: 2, revealedQuestions: [1],
@@ -252,9 +326,11 @@ test("the GitHub admin hash route loads, retries, controls the event and survive
     "https://dhoklim.github.io/colony-resistance/#/participate"));
   fireEvent.click(view.getByRole("button", { name: "1번 문제 공개" }));
   await view.findByRole("button", { name: "1번 결과 공개" });
+  assert.ok(view.getByRole("region", { name: "스크린 문제" }).textContent?.includes(questions[0].prompt));
   view.unmount();
   view = render(<PagesApp />);
   await view.findByRole("button", { name: "1번 결과 공개" });
+  assert.ok(view.getByRole("region", { name: "스크린 문제" }).textContent?.includes(questions[0].prompt));
 });
 
 test("operators start without setup and close with a simple retryable confirmation", async (t) => {
@@ -403,6 +479,7 @@ test("operators start without setup and close with a simple retryable confirmati
   await view.findByText("기록을 초기화하고 행사를 다시 시작했습니다.");
   assert.deepEqual(requests[3], { action: "reset", round: 1 });
   assert.ok(view.getByRole("button", { name: "응답 마감하기" }));
+  assert.equal(view.getByRole("region", { name: "스크린 문제" }).querySelectorAll(".screen-option").length, 0);
   for (let step = 0; step < 20; step++) {
     const questionId = Math.floor(step / 2) + 1;
     const name = step % 2 === 0 ? `${questionId}번 문제 공개` : `${questionId}번 결과 공개`;
@@ -410,6 +487,7 @@ test("operators start without setup and close with a simple retryable confirmati
     fireEvent.click(await view.findByRole("button", { name }));
     await view.findByText(`${questionId}번 ${step % 2 === 0 ? "문제를" : "결과를"} 공개했습니다.`);
     assert.deepEqual(requests[4 + step], { action: "advance", step, round: 2 });
+    assert.ok(view.getByRole("region", { name: "스크린 문제" }).textContent?.includes(questions[questionId - 1].prompt));
   }
   assert.equal((view.getByRole("button", { name: "모든 문제 진행 완료" }) as HTMLButtonElement).disabled, true);
 });
