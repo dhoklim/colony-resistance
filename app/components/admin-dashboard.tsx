@@ -201,9 +201,6 @@ export default function AdminDashboard({
               <h2 id="reveal-title">문제 진행</h2>
               <span className="badge">{event.revealedQuestions.length} / 10 공개</span>
             </div>
-            <p className="small-note">
-              버튼 하나로 문제 공개 → 결과 공개 → 다음 문제 공개 순서로 진행합니다. 참가자 화면은 자동으로 넘어갑니다.
-            </p>
             <AdminQuestionScreen event={event} distributions={data.distributions} />
             <div className="question-control">
               <div aria-live="polite">
